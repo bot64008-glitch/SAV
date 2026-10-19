@@ -1057,8 +1057,7 @@ end
     ║  Телепорт к предметам "box" внутри выбранного промежутка зон     ║
     ╚══════════════════════════════════════════════════════════════════╝
     Промежутки только парами: 1-2, 3-4, 5-6 ... (никаких 1-7 или 4-8).
-    Зоны ищутся автоматически (объекты с именами 1, 2, 3... / Zone1, Zone2...).
-    Если нашлись не те — впишите путь к папке с зонами в поле "Папка зон".
+    Точки зон вписаны вручную в таблицу POINTS ниже.
 ]]
 
 local Workspace = game:GetService("Workspace")
@@ -1076,17 +1075,16 @@ local S = {
 	running = false,
 	pair = 1,            -- номер пары: 1 = зоны 1-2, 2 = зоны 3-4 ...
 	keyword = "box",     -- часть названия предмета
-	zonePath = "",       -- необязательный путь к папке с зонами
 	returnMode = "pair", -- "pair" = первая точка промежутка, "one" = точка 1
 	stopWhenEmpty = false,
 	timeout = 8,         -- лимит секунд на один бокс
 	height = 2,          -- высота над боксом
-	pad = 40,            -- запас вокруг промежутка (studs)
+	padX = 20,           -- запас промежутка вдоль X (studs)
+	padYZ = 80,          -- запас в стороны и по высоте (studs)
 	holdE = true,
 	usePrompt = true,
 }
 local token = 0
-local zones, zoneRoot, maxZone = {}, nil, 0
 local boxes = {}
 local blacklist = {}
 local eHeld = false
@@ -1096,181 +1094,51 @@ local function trim(s)
 end
 
 ------------------------------------------------------------
--- Поиск зон
+-- Точки зон (X, Y, Z)
 ------------------------------------------------------------
-local function isZoneClass(inst)
-	return inst:IsA("PVInstance") or inst:IsA("Folder") or inst:IsA("Attachment")
-end
+local POINTS = {
+	Vector3.new(157.9, 3.1, -61.4),   -- 1
+	Vector3.new(249.3, 3.1, -57.7),   -- 2
+	Vector3.new(403.3, 3.1, -60.4),   -- 3
+	Vector3.new(634.4, 3.1, -58.1),   -- 4
+	Vector3.new(961.9, 3.1, -61.7),   -- 5
+	Vector3.new(1319.5, 3.1, -51.4),  -- 6
+	Vector3.new(1687.4, 3.1, -64.2),  -- 7
+	Vector3.new(2043.6, 3.1, -57.5),  -- 8
+	Vector3.new(2475.9, 3.1, -55.3),  -- 9
+	Vector3.new(3000.1, 3.1, -57.5),  -- 10
+	Vector3.new(3595.7, 3.1, -56.8),  -- 11
+	Vector3.new(4287.6, 3.1, -73.0),  -- 12
+	Vector3.new(5052.4, 3.1, -63.6),  -- 13
+}
+local maxZone = #POINTS
 
--- возвращает номер зоны и "вес" (чисто цифровое имя весит больше)
-local function zoneNumber(name)
-	if name:lower():find("box", 1, true) then return nil end
-	local n = name:match("^%s*(%d+)%s*$")
-	if n then return tonumber(n), 2 end
-	n = name:match("^[%a_%s%-]+(%d+)$")
-	if n then return tonumber(n), 1 end
-	return nil
-end
-
-local function resolvePath(path)
-	local cur = game
-	for seg in tostring(path):gmatch("[^%./\\]+") do
-		local nxt = cur:FindFirstChild(seg)
-		if not nxt and cur == game and seg == "Workspace" then nxt = Workspace end
-		if not nxt then return nil end
-		cur = nxt
-	end
-	return cur
-end
-
-local function collectChildren(parent)
-	local found, count = {}, 0
-	for _, ch in ipairs(parent:GetChildren()) do
-		local n = zoneNumber(ch.Name)
-		if n and isZoneClass(ch) and not found[n] then
-			found[n] = ch
-			count += 1
-		end
-	end
-	return found, count
-end
-
-local function scanZones()
-	local bestFound, bestParent
-
-	if S.zonePath ~= "" then
-		local p = resolvePath(S.zonePath)
-		if p then
-			local f, c = collectChildren(p)
-			if c > 0 then bestFound, bestParent = f, p end
-		end
-	end
-
-	if not bestFound then
-		local groups = {}
-		local i = 0
-		for _, inst in ipairs(Workspace:GetDescendants()) do
-			i += 1
-			if i % 4000 == 0 then task.wait() end
-			local n, w = zoneNumber(inst.Name)
-			if n and isZoneClass(inst) then
-				local isChar = inst:IsA("Model") and Players:GetPlayerFromCharacter(inst)
-				if not isChar then
-					local par = inst.Parent
-					local g = groups[par]
-					if not g then
-						g = { found = {}, score = 0 }
-						groups[par] = g
-					end
-					if not g.found[n] then
-						g.found[n] = inst
-						g.score += w
-					end
-				end
-			end
-		end
-		local bestScore = 0
-		for par, g in pairs(groups) do
-			if g.found[1] and g.score > bestScore then
-				bestScore, bestFound, bestParent = g.score, g.found, par
-			end
-		end
-	end
-
-	zones = bestFound or {}
-	zoneRoot = bestParent
-	maxZone = 0
-	for n in pairs(zones) do
-		if n > maxZone then maxZone = n end
-	end
-end
-
-------------------------------------------------------------
--- Геометрия
-------------------------------------------------------------
 local function addPoint(mn, mx, p)
 	if not mn then return p, p end
 	return Vector3.new(math.min(mn.X, p.X), math.min(mn.Y, p.Y), math.min(mn.Z, p.Z)),
 		Vector3.new(math.max(mx.X, p.X), math.max(mx.Y, p.Y), math.max(mx.Z, p.Z))
 end
 
-local function addBox(mn, mx, cf, size)
-	local hx, hy, hz = size.X / 2, size.Y / 2, size.Z / 2
-	for _, sx in ipairs({ -1, 1 }) do
-		for _, sy in ipairs({ -1, 1 }) do
-			for _, sz in ipairs({ -1, 1 }) do
-				mn, mx = addPoint(mn, mx, (cf * CFrame.new(sx * hx, sy * hy, sz * hz)).Position)
-			end
-		end
-	end
-	return mn, mx
-end
-
-local function getBounds(inst)
-	if not inst or not inst.Parent then return nil end
-	local mn, mx
-	if inst:IsA("Attachment") then
-		local p = inst.WorldPosition
-		return p, p
-	elseif inst:IsA("BasePart") then
-		mn, mx = addBox(mn, mx, inst.CFrame, inst.Size)
-	elseif inst:IsA("Model") then
-		local ok, cf, size = pcall(inst.GetBoundingBox, inst)
-		if ok then
-			mn, mx = addBox(mn, mx, cf, size)
-		else
-			local p = inst:GetPivot().Position
-			mn, mx = p, p
-		end
-	else
-		local cnt = 0
-		for _, d in ipairs(inst:GetDescendants()) do
-			if d:IsA("BasePart") then
-				mn, mx = addBox(mn, mx, d.CFrame, d.Size)
-				cnt += 1
-				if cnt >= 400 then break end
-			end
-		end
-	end
-	return mn, mx
-end
-
-local function zonePos(inst)
-	if not inst or not inst.Parent then return nil end
-	if inst:IsA("Attachment") then return inst.WorldPosition end
-	if inst:IsA("PVInstance") then return inst:GetPivot().Position end
-	local mn, mx = getBounds(inst)
-	if mn then return (mn + mx) / 2 end
-	return nil
-end
-
+-- пара k = точки (2k-1) и 2k; последняя непарная точка идёт одна
 local function pairLabel(k)
-	return ("%d-%d"):format(2 * k - 1, 2 * k)
+	local a, b = 2 * k - 1, 2 * k
+	if b > maxZone then return tostring(a) end
+	return ("%d-%d"):format(a, b)
 end
 
--- границы промежутка пары k (объединение двух зон + запас)
+-- границы промежутка: коробка между двумя точками + запас
 local function rangeBounds(k)
 	local mn, mx
 	for _, n in ipairs({ 2 * k - 1, 2 * k }) do
-		local z = zones[n]
-		if z then
-			local a, b = getBounds(z)
-			if a then
-				mn, mx = addPoint(mn, mx, a)
-				mn, mx = addPoint(mn, mx, b)
-			end
-		end
+		local p = POINTS[n]
+		if p then mn, mx = addPoint(mn, mx, p) end
 	end
 	if not mn then return nil end
-	local pad = Vector3.new(S.pad, S.pad, S.pad)
+	local pad = Vector3.new(S.padX, S.padYZ, S.padYZ)
 	return mn - pad, mx + pad
 end
 
 local function inRange(box, k, mn, mx)
-	for _, n in ipairs({ 2 * k - 1, 2 * k }) do
-		local z = zones[n]
-		if z and z.Parent and box:IsDescendantOf(z) then return true end
-	end
 	if not mn then return false end
 	local p = box:GetPivot().Position
 	return p.X >= mn.X and p.X <= mx.X
@@ -1359,9 +1227,8 @@ end
 
 local function homePos()
 	local k = (S.returnMode == "pair") and (2 * S.pair - 1) or 1
-	local z = zones[k] or zones[2 * S.pair] or zones[1]
-	local p = z and zonePos(z)
-	return p and (p + Vector3.new(0, 4, 0)) or nil
+	local p = POINTS[k] or POINTS[1]
+	return p + Vector3.new(0, 4, 0)
 end
 
 local function gatherInteractables(box)
@@ -1379,8 +1246,6 @@ end
 ------------------------------------------------------------
 -- МЕНЮ (визуал и подключение — как в MenuLib)
 ------------------------------------------------------------
-scanZones()
-
 local Win = MenuLib.new({
 	Name = "BoxFarmGUI",
 	Title = "WEB VALLEY",
@@ -1397,10 +1262,10 @@ local status
 Main:AddSection("АВТОФАРМ БОКСОВ")
 status = Main:AddStatus()
 status.SetStatus("Остановлено", C.sub)
-status.SetInfo(maxZone > 0 and ("Зон найдено: %d"):format(maxZone) or "Зоны не найдены (см. НАСТРОЙКИ)")
+status.SetInfo(("Точек: %d"):format(maxZone))
 
 local pairOptions = {}
-local pairsCount = (maxZone > 0) and math.max(1, math.ceil(maxZone / 2)) or 20
+local pairsCount = math.ceil(maxZone / 2)
 for k = 1, pairsCount do
 	pairOptions[#pairOptions + 1] = { id = k, label = pairLabel(k) }
 end
@@ -1452,9 +1317,13 @@ Cfg:AddNumber("Высота над боксом", {
 	Default = 2, Min = -10, Max = 30, Step = 1, Dec = 0,
 	Callback = function(v) S.height = v end,
 })
-Cfg:AddNumber("Запас промежутка", {
-	Default = 40, Min = 0, Max = 500, Step = 10, Dec = 0,
-	Callback = function(v) S.pad = v end,
+Cfg:AddNumber("Запас вдоль X", {
+	Default = 20, Min = 0, Max = 300, Step = 10, Dec = 0,
+	Callback = function(v) S.padX = v end,
+})
+Cfg:AddNumber("Запас в стороны/высота", {
+	Default = 80, Min = 0, Max = 500, Step = 10, Dec = 0,
+	Callback = function(v) S.padYZ = v end,
 })
 
 Cfg:AddSection("ПОИСК")
@@ -1465,25 +1334,6 @@ Cfg:AddInput("Слово в названии (box)", {
 		task.spawn(rebuildBoxes)
 	end,
 })
-Cfg:AddInput("Папка зон, напр. Workspace.Zones", {
-	Default = "",
-	Callback = function(text)
-		S.zonePath = trim(text)
-	end,
-})
-Cfg:AddButton("Пересканировать зоны", function()
-	task.spawn(function()
-		status.SetInfo("Сканирую зоны...", C.sub)
-		scanZones()
-		if maxZone > 0 then
-			local where = zoneRoot and zoneRoot.Name or "?"
-			status.SetInfo(("Зон: %d · папка: %s"):format(maxZone, where), C.sub)
-		else
-			status.SetInfo("Зоны не найдены — укажите папку зон", C.sub)
-		end
-	end)
-end)
-Cfg:AddNote("Список промежутков строится при запуске скрипта.", 28)
 
 ------------------------------------------------------------
 -- Цикл фарма
@@ -1493,22 +1343,10 @@ local function farmLoop(my)
 		return S.running and token == my and Win.Alive
 	end
 
-	if not zones[1] then
-		status.SetStatus("Поиск зон...", C.yellow)
-		scanZones()
-	end
-
 	local collected = 0
 	local homed = false
 
 	while ok() do
-		local a, b = 2 * S.pair - 1, 2 * S.pair
-		if not zones[a] and not zones[b] then
-			status.SetInfo(("Зона %s не найдена"):format(pairLabel(S.pair)), C.sub)
-			stop("Нет зоны")
-			return
-		end
-
 		local char = LocalPlayer.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
