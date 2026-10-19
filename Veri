@@ -1,0 +1,1624 @@
+--[[
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║  MenuLib — меню из WEB VALLEY STUDIO · NPC Walker v17            ║
+    ║  Отдельная библиотека: подключается к любому скрипту             ║
+    ╚══════════════════════════════════════════════════════════════════╝
+
+    ЧТО ЭТО
+    Тёмное меню (чёрный / серый / белый / жёлтый) с вкладками, переключателями,
+    числовыми полями (− / + и ручной ввод), кнопками, выбором режима, текстовыми
+    полями, перетаскиванием (мышь и палец), сворачиванием в плавающую иконку,
+    счётчиком FPS и (по желанию) сохранением настроек в файл.
+
+    ──────────────────────────────────────────────────────────────────
+    ПОДКЛЮЧЕНИЕ (любой из способов)
+    ──────────────────────────────────────────────────────────────────
+    1) Файл в папке экзекутора (workspace):
+           local MenuLib = loadstring(readfile("MenuLib.lua"))()
+
+    2) С хостинга (GitHub raw и т.п.):
+           local MenuLib = loadstring(game:HttpGet("https://.../MenuLib.lua"))()
+
+    3) Вставить весь файл в начало своего скрипта и УДАЛИТЬ последнюю строку
+       `return MenuLib` (иначе скрипт завершится на ней). Переменная MenuLib
+       после этого уже доступна ниже по коду.
+
+    ──────────────────────────────────────────────────────────────────
+    БЫСТРЫЙ СТАРТ
+    ──────────────────────────────────────────────────────────────────
+        local Win = MenuLib.new({ Title = "МОЙ СКРИПТ", Subtitle = "STUDIO · TOOL" })
+        local Main = Win:AddTab("ГЛАВНАЯ")
+
+        Main:AddSection("НАСТРОЙКИ")
+        Main:AddToggle("Автофарм", { Default = false, Callback = function(v) print(v) end })
+        Main:AddNumber("Скорость", { Default = 16, Min = 1, Max = 100, Step = 1, Callback = print })
+        Main:AddButton("Сделать что-то", function() print("клик") end)
+
+    ──────────────────────────────────────────────────────────────────
+    API ОКНА  (Win = MenuLib.new(opts))
+    ──────────────────────────────────────────────────────────────────
+    opts (все поля необязательны):
+        Name       = "MenuLibGUI"   имя ScreenGui (старое окно с таким именем удаляется)
+        Title      = "WEB VALLEY"   верхняя строка в шапке
+        Subtitle   = "STUDIO"       нижняя (жёлтая) строка в шапке
+        LogoId     = 12345          id картинки для логотипа/иконки (rbxassetid)
+        Width      = 268            ширина окна
+        Height     = 340            высота окна (по умолчанию подбирается под экран)
+        Position   = UDim2.new(...) стартовая позиция (по умолчанию 10, 8)
+        ShowFPS    = true           показывать FPS в шапке
+        SaveFile   = "file.json"    включает сохранение флагов (см. ниже)
+        OnClose    = function()     вызывается по кнопке ⏻ вместо Win:Destroy()
+
+    Методы:
+        Win:AddTab(name)            -> Page   (первая вкладка выбирается сама)
+        Win:SelectTab(index|name)   выбрать вкладку
+        Win:SetMinimized(true|false) свернуть в иконку / развернуть
+        Win:SetVisible(true|false)  скрыть/показать всё меню целиком
+        Win:Track(connection)       запомнить соединение — оно отключится при Destroy
+        Win:Save() / Win:Load()     сохранить / загрузить флаги (нужен SaveFile)
+        Win:Destroy()               полностью убрать меню и отключить все события
+        Win.OnDestroy = function()  ваш колбэк очистки (останов циклов и т.п.)
+        Win.Flags                   таблица значений элементов, у которых есть Flag
+        Win.Alive                   true, пока меню существует (удобно для циклов)
+
+    ──────────────────────────────────────────────────────────────────
+    API ВКЛАДКИ  (Page = Win:AddTab(name))
+    ──────────────────────────────────────────────────────────────────
+    Page:AddSection(text)                      жёлтый заголовок раздела
+    Page:AddNote(text, height)                 серая поясняющая строка (height по умолч. 28)
+
+    Page:AddToggle(text, spec | get, set)      переключатель
+    Page:AddNumber(label, spec)                число с − / + и ручным вводом
+    Page:AddButton(text, callback, style)      кнопка
+    Page:AddButtonRow({ {...}, {...} })        две кнопки в одну строку (СТАРТ / СТОП)
+    Page:AddCycle(prefix, options, spec)       кнопка-«режим», листает варианты по кругу
+    Page:AddInput(placeholder, spec)           текстовое поле
+    Page:AddStatus()                           карточка «статус + информация»
+
+    Page.OnShow = function()                   вызывается при открытии вкладки
+
+    Два способа задать значение элемента (выберите любой):
+
+      А) Со своим состоянием (как в оригинальном скрипте) — вы сами храните значение:
+            Page:AddToggle("Прыжок", function() return state.jump end,
+                                     function(v) state.jump = v end)
+            Page:AddNumber("Скорость", {
+                get = function() return state.speed end,
+                set = function(v) state.speed = v end,
+                step = 1, min = 1, max = 300, dec = 0,
+            })
+
+      Б) С Flag — значение хранит меню в Win.Flags (и может сохраняться в файл):
+            Page:AddToggle("Прыжок", { Flag = "jump", Default = true,
+                                       Callback = function(v) ... end })
+            -- читать:   Win.Flags.jump
+            -- менять:   см. объект, который вернул AddToggle (:Set(v))
+
+    spec для AddNumber:
+        Min, Max          границы (в оригинале: min, max)
+        Step              шаг, число ИЛИ функция(dir, current) -> шаг
+                          (dir = +1 или −1; так сделан шаг зазора: 0.1 до 2, потом 0.5)
+        Dec               знаков после запятой (0 — целые)
+        Default, Flag, Callback  — способ Б;   get, set — способ А
+
+    AddButton style (необязательный): { Bg = Color3, Fg = Color3, Height = 32 }
+        Готовые цвета: MenuLib.Theme.yellow / btn / card / text / white / black
+
+    AddButtonRow: { { Text="▶ СТАРТ", Bg=yellow, Fg=black, Callback=fn },
+                    { Text="■ СТОП",  Callback=fn } }  -> возвращает {btn1, btn2}
+
+    AddCycle(prefix, options, spec):
+        options = { "Один", "Два" }  или  { {id="a", label="Один"}, {id="b", label="Два"} }
+        spec    = { Default = "a", Flag = "mode", Callback = function(id) end }
+        Возвращает { Get(), Set(id) }. Текст кнопки: «prefix: label  ›»
+
+    AddInput(placeholder, spec):
+        spec = { Default = "", Flag = "q", Callback = function(text, enter) end,
+                 Live = false }     -- Live=true: колбэк при каждом изменении текста
+        Возвращает { Box, Get(), Set(text), SetVisible(bool) }
+
+    AddStatus() -> { SetStatus(text, color), SetInfo(text, color) }
+
+    Все AddToggle / AddNumber возвращают { Get, Set, Refresh }.
+    Refresh() — перечитать значение из get() (если вы изменили состояние из кода).
+
+    ──────────────────────────────────────────────────────────────────
+    ВАЖНО
+    ──────────────────────────────────────────────────────────────────
+    • Обязательно вызывайте Win:Destroy() при выключении скрипта (в оригинале это
+      M.shutdown) — иначе соединения событий останутся жить.
+    • Чтобы ваш цикл остановился вместе с меню:  while Win.Alive do ... task.wait() end
+    • Меню помещается в gethui() (если есть), иначе в PlayerGui.
+    • Все свои соединения пропускайте через Win:Track(...) — тогда они отключатся сами.
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local MenuLib = {}
+MenuLib.__index = MenuLib
+
+local Page = {}
+Page.__index = Page
+
+-- Палитра: чёрный / серый / белый / жёлтый. Можно менять ДО создания окна.
+MenuLib.Theme = {
+	bg = Color3.fromRGB(13, 13, 13),
+	card = Color3.fromRGB(30, 30, 30),
+	btn = Color3.fromRGB(46, 46, 46),
+	line = Color3.fromRGB(56, 56, 56),
+	text = Color3.fromRGB(238, 238, 238),
+	sub = Color3.fromRGB(135, 135, 135),
+	yellow = Color3.fromRGB(255, 204, 0),
+	black = Color3.fromRGB(10, 10, 10),
+	white = Color3.fromRGB(235, 235, 235),
+}
+local C = MenuLib.Theme
+
+local HEADER_H = 42
+local TAB_H = 28
+local TOP_H = HEADER_H + TAB_H + 1
+
+------------------------------------------------------------
+-- Вспомогательное
+------------------------------------------------------------
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.Touch
+		or input.UserInputType == Enum.UserInputType.MouseButton1
+end
+
+-- Кнопка со скруглением и анимацией нажатия. bag — куда складывать соединения.
+local function makeButton(parent, text, bg, fg, size, bag)
+	local btn = Instance.new("TextButton")
+	btn.AutoButtonColor = false
+	btn.Size = size
+	btn.BackgroundColor3 = bg
+	btn.BorderSizePixel = 0
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 13
+	btn.TextColor3 = fg
+	btn.Text = text
+	btn.Parent = parent
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+	local scale = Instance.new("UIScale", btn)
+	bag[#bag + 1] = btn.InputBegan:Connect(function(input)
+		if isPress(input) then
+			TweenService:Create(scale, TweenInfo.new(0.07), { Scale = 0.95 }):Play()
+		end
+	end)
+	bag[#bag + 1] = btn.InputEnded:Connect(function(input)
+		if isPress(input) then
+			TweenService:Create(scale, TweenInfo.new(0.1), { Scale = 1 }):Play()
+		end
+	end)
+	return btn
+end
+
+-- Логотип: сначала rbxassetid, если не загрузился — миниатюра ассета
+local function applyIcon(img, id)
+	img.Image = "rbxassetid://" .. id
+	task.delay(4, function()
+		if img.Parent and not img.IsLoaded then
+			img.Image = ("rbxthumb://type=Asset&id=%d&w=150&h=150"):format(id)
+		end
+	end)
+end
+
+-- Перетаскивание. onTap вызывается, если это было нажатие без сдвига.
+local function makeDraggable(win, handle, target, onTap)
+	local dragging, dragInput, dragStart, startPos, moved = false, nil, nil, nil, false
+	win:Track(handle.InputBegan:Connect(function(input)
+		if isPress(input) then
+			dragging = true
+			moved = false
+			dragStart = input.Position
+			startPos = target.Position
+			local c
+			c = input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					c:Disconnect()
+					if not moved and onTap then onTap() end
+				end
+			end)
+		end
+	end))
+	win:Track(handle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end))
+	win:Track(UserInputService.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
+			local d = input.Position - dragStart
+			if d.Magnitude > 6 then moved = true end
+			target.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + d.X,
+				startPos.Y.Scale, startPos.Y.Offset + d.Y
+			)
+		end
+	end))
+end
+
+------------------------------------------------------------
+-- ОКНО
+------------------------------------------------------------
+function MenuLib.new(opts)
+	opts = opts or {}
+	local self = setmetatable({}, MenuLib)
+	self.Alive = true
+	self.Conns = {}
+	self.Tabs = {}
+	self.Flags = {}
+	self.Refreshers = {}
+	self.Callbacks = {}
+	self.SaveFile = opts.SaveFile
+	self.LogoId = opts.LogoId
+	self.OnClose = opts.OnClose
+	self.OnDestroy = nil
+	self._saveQueued = false
+
+	local name = opts.Name or "MenuLibGUI"
+	local width = opts.Width or 268
+	local player = Players.LocalPlayer
+	local playerGui = player:WaitForChild("PlayerGui")
+
+	local parent = playerGui
+	do
+		local ok, hui = pcall(function() return gethui() end)
+		if ok and hui then parent = hui end
+	end
+	for _, p in ipairs({ playerGui, parent }) do
+		local old = p:FindFirstChild(name)
+		if old then old:Destroy() end
+	end
+
+	local cam = workspace.CurrentCamera
+	local viewH = cam and cam.ViewportSize.Y or 600
+	local height = opts.Height or math.clamp(viewH - 60, 240, 360)
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = name
+	gui.ResetOnSpawn = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.DisplayOrder = 999
+	gui.Parent = parent
+	self.Gui = gui
+
+	local main = Instance.new("Frame")
+	main.Name = "Main"
+	main.Size = UDim2.fromOffset(width, height)
+	main.Position = opts.Position or UDim2.new(0, 10, 0, 8)
+	main.BackgroundColor3 = C.bg
+	main.BorderSizePixel = 0
+	main.ClipsDescendants = true
+	main.Parent = gui
+	Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+	do
+		local stroke = Instance.new("UIStroke", main)
+		stroke.Color = C.line
+		stroke.Thickness = 1
+	end
+	self.Main = main
+
+	-- Шапка
+	local header = Instance.new("Frame")
+	header.Name = "Header"
+	header.Size = UDim2.new(1, 0, 0, HEADER_H)
+	header.BackgroundTransparency = 1
+	header.Parent = main
+	self.Header = header
+
+	local textX = 10
+	if self.LogoId then
+		local logo = Instance.new("ImageLabel")
+		logo.Size = UDim2.fromOffset(28, 28)
+		logo.Position = UDim2.fromOffset(10, (HEADER_H - 28) / 2)
+		logo.BackgroundColor3 = C.card
+		logo.BorderSizePixel = 0
+		logo.ScaleType = Enum.ScaleType.Fit
+		logo.Parent = header
+		Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 7)
+		applyIcon(logo, self.LogoId)
+		textX = 46
+	end
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(textX, 6)
+	title.Size = UDim2.fromOffset(100, 16)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 13
+	title.TextColor3 = C.text
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextTruncate = Enum.TextTruncate.AtEnd
+	title.Text = opts.Title or "WEB VALLEY"
+	title.Parent = header
+
+	local subtitle = Instance.new("TextLabel")
+	subtitle.BackgroundTransparency = 1
+	subtitle.Position = UDim2.fromOffset(textX, 23)
+	subtitle.Size = UDim2.fromOffset(100, 12)
+	subtitle.Font = Enum.Font.GothamMedium
+	subtitle.TextSize = 9
+	subtitle.TextColor3 = C.yellow
+	subtitle.TextXAlignment = Enum.TextXAlignment.Left
+	subtitle.TextTruncate = Enum.TextTruncate.AtEnd
+	subtitle.Text = opts.Subtitle or "STUDIO"
+	subtitle.Parent = header
+	self.TitleLabel, self.SubtitleLabel = title, subtitle
+
+	if opts.ShowFPS ~= false then
+		local fps = Instance.new("TextLabel")
+		fps.BackgroundTransparency = 1
+		fps.AnchorPoint = Vector2.new(1, 0.5)
+		fps.Position = UDim2.new(1, -72, 0.5, 0)
+		fps.Size = UDim2.fromOffset(46, 16)
+		fps.Font = Enum.Font.GothamMedium
+		fps.TextSize = 11
+		fps.TextColor3 = C.sub
+		fps.TextXAlignment = Enum.TextXAlignment.Right
+		fps.Text = "-- FPS"
+		fps.Parent = header
+		self.FpsLabel = fps
+		self.Fps = 60
+		local frames, acc = 0, 0
+		self:Track(RunService.RenderStepped:Connect(function(dt)
+			frames += 1
+			acc += dt
+			if acc >= 0.5 then
+				self.Fps = frames / acc
+				fps.Text = ("%d FPS"):format(math.floor(self.Fps + 0.5))
+				frames, acc = 0, 0
+			end
+		end))
+	end
+
+	local minBtn = makeButton(header, "—", C.btn, C.text, UDim2.fromOffset(26, 26), self.Conns)
+	minBtn.AnchorPoint = Vector2.new(1, 0.5)
+	minBtn.Position = UDim2.new(1, -8, 0.5, 0)
+
+	local closeBtn = makeButton(header, "⏻", C.btn, C.yellow, UDim2.fromOffset(26, 26), self.Conns)
+	closeBtn.AnchorPoint = Vector2.new(1, 0.5)
+	closeBtn.Position = UDim2.new(1, -38, 0.5, 0)
+
+	local headerLine = Instance.new("Frame")
+	headerLine.Size = UDim2.new(1, 0, 0, 1)
+	headerLine.Position = UDim2.fromOffset(0, HEADER_H)
+	headerLine.BackgroundColor3 = C.line
+	headerLine.BorderSizePixel = 0
+	headerLine.Parent = main
+
+	-- Полоса вкладок
+	local tabBar = Instance.new("Frame")
+	tabBar.Position = UDim2.fromOffset(0, HEADER_H + 1)
+	tabBar.Size = UDim2.new(1, 0, 0, TAB_H)
+	tabBar.BackgroundTransparency = 1
+	tabBar.Parent = main
+	self.TabBar = tabBar
+
+	-- Плавающая иконка (свёрнутое состояние)
+	local iconFrame = Instance.new("Frame")
+	iconFrame.Size = UDim2.fromOffset(46, 46)
+	iconFrame.Position = main.Position
+	iconFrame.BackgroundColor3 = C.bg
+	iconFrame.BorderSizePixel = 0
+	iconFrame.Visible = false
+	iconFrame.Parent = gui
+	Instance.new("UICorner", iconFrame).CornerRadius = UDim.new(0, 12)
+	do
+		local s = Instance.new("UIStroke", iconFrame)
+		s.Color = C.yellow
+		s.Thickness = 1.5
+	end
+	if self.LogoId then
+		local img = Instance.new("ImageLabel")
+		img.AnchorPoint = Vector2.new(0.5, 0.5)
+		img.Position = UDim2.new(0.5, 0, 0.5, 0)
+		img.Size = UDim2.new(1, -10, 1, -10)
+		img.BackgroundTransparency = 1
+		img.ScaleType = Enum.ScaleType.Fit
+		img.Parent = iconFrame
+		Instance.new("UICorner", img).CornerRadius = UDim.new(0, 8)
+		applyIcon(img, self.LogoId)
+	else
+		local t = Instance.new("TextLabel")
+		t.BackgroundTransparency = 1
+		t.Size = UDim2.new(1, 0, 1, 0)
+		t.Font = Enum.Font.GothamBold
+		t.TextSize = 20
+		t.TextColor3 = C.yellow
+		t.Text = "☰"
+		t.Parent = iconFrame
+	end
+	self.IconFrame = iconFrame
+
+	makeDraggable(self, header, main, nil)
+	makeDraggable(self, iconFrame, iconFrame, function()
+		self:SetMinimized(false)
+	end)
+
+	self:Track(minBtn.Activated:Connect(function()
+		self:SetMinimized(true)
+	end))
+	self:Track(closeBtn.Activated:Connect(function()
+		if self.OnClose then
+			self.OnClose()
+		else
+			self:Destroy()
+		end
+	end))
+
+	return self
+end
+
+function MenuLib:Track(conn)
+	self.Conns[#self.Conns + 1] = conn
+	return conn
+end
+
+function MenuLib:SetMinimized(v)
+	if v then
+		self.IconFrame.Position = self.Main.Position
+		self.Main.Visible = false
+		self.IconFrame.Visible = true
+	else
+		self.Main.Position = self.IconFrame.Position
+		self.IconFrame.Visible = false
+		self.Main.Visible = true
+	end
+end
+
+function MenuLib:SetVisible(v)
+	self.Gui.Enabled = v and true or false
+end
+
+function MenuLib:Destroy()
+	if not self.Alive then return end
+	self.Alive = false
+	if self.OnDestroy then pcall(self.OnDestroy) end
+	for _, c in ipairs(self.Conns) do
+		pcall(function() c:Disconnect() end)
+	end
+	table.clear(self.Conns)
+	self.Gui:Destroy()
+end
+
+------------------------------------------------------------
+-- ВКЛАДКИ
+------------------------------------------------------------
+function MenuLib:SelectTab(which)
+	for i, t in ipairs(self.Tabs) do
+		local active = (which == i) or (which == t.Name)
+		t.Page.Frame.Visible = active
+		t.Btn.TextColor3 = active and C.yellow or C.sub
+		t.Line.Visible = active
+		if active and t.Page.OnShow then
+			pcall(t.Page.OnShow)
+		end
+	end
+end
+
+function MenuLib:AddTab(name)
+	local sf = Instance.new("ScrollingFrame")
+	sf.BackgroundTransparency = 1
+	sf.BorderSizePixel = 0
+	sf.Position = UDim2.fromOffset(0, TOP_H)
+	sf.Size = UDim2.new(1, 0, 1, -TOP_H)
+	sf.CanvasSize = UDim2.new(0, 0, 0, 0)
+	sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	sf.ScrollBarThickness = 3
+	sf.ScrollBarImageColor3 = C.yellow
+	sf.ScrollingDirection = Enum.ScrollingDirection.Y
+	sf.Visible = false
+	sf.Parent = self.Main
+	local pad = Instance.new("UIPadding", sf)
+	pad.PaddingTop = UDim.new(0, 8)
+	pad.PaddingBottom = UDim.new(0, 8)
+	pad.PaddingLeft = UDim.new(0, 8)
+	pad.PaddingRight = UDim.new(0, 10)
+	local list = Instance.new("UIListLayout", sf)
+	list.Padding = UDim.new(0, 6)
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+
+	local page = setmetatable({ Frame = sf, n = 0, Window = self }, Page)
+
+	local b = Instance.new("TextButton")
+	b.AutoButtonColor = false
+	b.BackgroundTransparency = 1
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 10
+	b.TextColor3 = C.sub
+	b.Text = name
+	b.Parent = self.TabBar
+	local ln = Instance.new("Frame")
+	ln.AnchorPoint = Vector2.new(0.5, 1)
+	ln.Position = UDim2.new(0.5, 0, 1, 0)
+	ln.Size = UDim2.new(0.6, 0, 0, 2)
+	ln.BackgroundColor3 = C.yellow
+	ln.BorderSizePixel = 0
+	ln.Visible = false
+	ln.Parent = b
+
+	local tab = { Name = name, Page = page, Btn = b, Line = ln }
+	self.Tabs[#self.Tabs + 1] = tab
+	local index = #self.Tabs
+
+	-- пересчитать ширину всех кнопок вкладок
+	local count = #self.Tabs
+	for i, t in ipairs(self.Tabs) do
+		t.Btn.Size = UDim2.new(1 / count, 0, 1, 0)
+		t.Btn.Position = UDim2.new((i - 1) / count, 0, 0, 0)
+	end
+
+	self:Track(b.Activated:Connect(function()
+		self:SelectTab(index)
+	end))
+
+	if index == 1 then
+		self:SelectTab(1)
+	end
+	return page
+end
+
+------------------------------------------------------------
+-- Привязка значений: способ Б (Flag + Default + Callback)
+------------------------------------------------------------
+function MenuLib:_bind(label, spec)
+	local flag = spec.Flag or label
+	if self.Flags[flag] == nil then
+		self.Flags[flag] = spec.Default
+	end
+	self.Callbacks[flag] = spec.Callback
+	local win = self
+	local function get()
+		return win.Flags[flag]
+	end
+	local function set(v)
+		win.Flags[flag] = v
+		if spec.Callback then spec.Callback(v) end
+		win:_queueSave()
+	end
+	return get, set
+end
+
+function MenuLib:_queueSave()
+	if not self.SaveFile or self._saveQueued then return end
+	self._saveQueued = true
+	task.delay(1.5, function()
+		self._saveQueued = false
+		if self.Alive then self:Save() end
+	end)
+end
+
+function MenuLib:Save()
+	if not self.SaveFile or not writefile then return end
+	pcall(function()
+		writefile(self.SaveFile, HttpService:JSONEncode(self.Flags))
+	end)
+end
+
+-- Вызывайте ПОСЛЕ создания всех элементов: подставит сохранённые значения
+-- и вызовет Callback каждого элемента.
+function MenuLib:Load()
+	if not self.SaveFile or not (readfile and isfile) then return end
+	local ok, raw = pcall(function()
+		if isfile(self.SaveFile) then return readfile(self.SaveFile) end
+	end)
+	if not ok or not raw then return end
+	local ok2, data = pcall(function() return HttpService:JSONDecode(raw) end)
+	if not ok2 or type(data) ~= "table" then return end
+	for flag, value in pairs(data) do
+		local cur = self.Flags[flag]
+		if cur ~= nil and type(cur) == type(value) then
+			self.Flags[flag] = value
+			local cb = self.Callbacks[flag]
+			if cb then pcall(cb, value) end
+		end
+	end
+	for _, refresh in ipairs(self.Refreshers) do
+		pcall(refresh)
+	end
+end
+
+------------------------------------------------------------
+-- ЭЛЕМЕНТЫ СТРАНИЦЫ
+------------------------------------------------------------
+function Page:_order()
+	self.n += 1
+	return self.n
+end
+
+function Page:AddSection(text)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Size = UDim2.new(1, 0, 0, 16)
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = 10
+	l.TextColor3 = C.yellow
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Text = text
+	l.LayoutOrder = self:_order()
+	l.Parent = self.Frame
+	return l
+end
+
+function Page:AddNote(text, height)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Size = UDim2.new(1, 0, 0, height or 28)
+	l.Font = Enum.Font.Gotham
+	l.TextSize = 11
+	l.TextColor3 = C.sub
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextYAlignment = Enum.TextYAlignment.Top
+	l.TextWrapped = true
+	l.Text = text
+	l.LayoutOrder = self:_order()
+	l.Parent = self.Frame
+	return l
+end
+
+-- Переключатель. Формы вызова:
+--   AddToggle(text, getFn, setFn)
+--   AddToggle(text, { Flag=, Default=, Callback= })
+function Page:AddToggle(text, get, set)
+	local win = self.Window
+	if type(get) == "table" then
+		get, set = win:_bind(text, get)
+	end
+
+	local row = Instance.new("TextButton")
+	row.AutoButtonColor = false
+	row.Text = ""
+	row.Size = UDim2.new(1, 0, 0, 32)
+	row.BackgroundColor3 = C.card
+	row.BorderSizePixel = 0
+	row.LayoutOrder = self:_order()
+	row.Parent = self.Frame
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(10, 0)
+	label.Size = UDim2.new(1, -60, 1, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 11
+	label.TextColor3 = C.text
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Text = text
+	label.Parent = row
+
+	local pill = Instance.new("Frame")
+	pill.AnchorPoint = Vector2.new(1, 0.5)
+	pill.Position = UDim2.new(1, -10, 0.5, 0)
+	pill.Size = UDim2.fromOffset(34, 18)
+	pill.BorderSizePixel = 0
+	pill.Parent = row
+	Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+
+	local knob = Instance.new("Frame")
+	knob.AnchorPoint = Vector2.new(0, 0.5)
+	knob.Size = UDim2.fromOffset(14, 14)
+	knob.BorderSizePixel = 0
+	knob.Parent = pill
+	Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+	local function refresh(animate)
+		local on = get() and true or false
+		local goalPill = on and C.yellow or C.btn
+		local goalKnob = on and C.black or C.text
+		local goalPos = on and UDim2.new(0, 18, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
+		if animate then
+			TweenService:Create(pill, TweenInfo.new(0.12), { BackgroundColor3 = goalPill }):Play()
+			TweenService:Create(knob, TweenInfo.new(0.12), { Position = goalPos, BackgroundColor3 = goalKnob }):Play()
+		else
+			pill.BackgroundColor3 = goalPill
+			knob.BackgroundColor3 = goalKnob
+			knob.Position = goalPos
+		end
+	end
+
+	win:Track(row.Activated:Connect(function()
+		set(not get())
+		refresh(true)
+	end))
+	refresh(false)
+	win.Refreshers[#win.Refreshers + 1] = function() refresh(false) end
+
+	return {
+		Get = get,
+		Set = function(v)
+			set(v)
+			refresh(true)
+		end,
+		Refresh = function() refresh(false) end,
+	}
+end
+
+-- Числовая строка. spec:
+--   способ А: { get=, set=, step=, min=, max=, dec= }
+--   способ Б: { Flag=, Default=, Callback=, Step=, Min=, Max=, Dec= }
+--   step — число или функция(dir, current) -> число
+function Page:AddNumber(label, spec)
+	local win = self.Window
+	local get, set = spec.get, spec.set
+	if not get then
+		get, set = win:_bind(label, spec)
+	end
+	local step = spec.step or spec.Step or 1
+	local min = spec.min or spec.Min or 0
+	local max = spec.max or spec.Max or 100
+	local dec = spec.dec or spec.Dec or 0
+
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 32)
+	row.BackgroundColor3 = C.card
+	row.BorderSizePixel = 0
+	row.LayoutOrder = self:_order()
+	row.Parent = self.Frame
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+	local lab = Instance.new("TextLabel")
+	lab.BackgroundTransparency = 1
+	lab.Position = UDim2.fromOffset(10, 0)
+	lab.Size = UDim2.new(1, -122, 1, 0)
+	lab.Font = Enum.Font.Gotham
+	lab.TextSize = 11
+	lab.TextColor3 = C.text
+	lab.TextXAlignment = Enum.TextXAlignment.Left
+	lab.TextTruncate = Enum.TextTruncate.AtEnd
+	lab.Text = label
+	lab.Parent = row
+
+	local plus = makeButton(row, "+", C.btn, C.text, UDim2.fromOffset(26, 24), win.Conns)
+	plus.AnchorPoint = Vector2.new(1, 0.5)
+	plus.Position = UDim2.new(1, -6, 0.5, 0)
+	plus.TextSize = 15
+	local minus = makeButton(row, "−", C.btn, C.text, UDim2.fromOffset(26, 24), win.Conns)
+	minus.AnchorPoint = Vector2.new(1, 0.5)
+	minus.Position = UDim2.new(1, -36, 0.5, 0)
+	minus.TextSize = 15
+
+	local box = Instance.new("TextBox")
+	box.AnchorPoint = Vector2.new(1, 0.5)
+	box.Position = UDim2.new(1, -66, 0.5, 0)
+	box.Size = UDim2.fromOffset(48, 24)
+	box.BackgroundColor3 = C.bg
+	box.BorderSizePixel = 0
+	box.Font = Enum.Font.GothamBold
+	box.TextSize = 12
+	box.TextColor3 = C.yellow
+	box.ClearTextOnFocus = true
+	box.Text = ""
+	box.Parent = row
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+	local function fmt(v)
+		if dec > 0 then
+			return ("%." .. dec .. "f"):format(v)
+		end
+		return tostring(math.floor(v + 0.5))
+	end
+	local function apply(v)
+		v = math.clamp(v, min, max)
+		local m = 10 ^ dec
+		set(math.floor(v * m + 0.5) / m)
+	end
+	local function refresh()
+		local v = get()
+		if type(v) == "number" then
+			box.Text = fmt(v)
+		end
+	end
+	local function stepBy(dir)
+		local cur = get() or min
+		local st = step
+		if type(st) == "function" then
+			st = st(dir, cur)
+		end
+		apply(cur + dir * st)
+		refresh()
+	end
+
+	win:Track(box.FocusLost:Connect(function()
+		local n = tonumber((box.Text:gsub(",", ".")))
+		if n then
+			apply(n)
+		end
+		refresh()
+	end))
+	win:Track(plus.Activated:Connect(function() stepBy(1) end))
+	win:Track(minus.Activated:Connect(function() stepBy(-1) end))
+	refresh()
+	win.Refreshers[#win.Refreshers + 1] = refresh
+
+	return {
+		Get = get,
+		Set = function(v)
+			apply(v)
+			refresh()
+		end,
+		Refresh = refresh,
+	}
+end
+
+-- Кнопка. style = { Bg=, Fg=, Height= }
+function Page:AddButton(text, callback, style)
+	style = style or {}
+	local win = self.Window
+	local b = makeButton(self.Frame, text, style.Bg or C.btn, style.Fg or C.text,
+		UDim2.new(1, 0, 0, style.Height or 32), win.Conns)
+	b.LayoutOrder = self:_order()
+	if callback then
+		win:Track(b.Activated:Connect(callback))
+	end
+	return b
+end
+
+-- Строка из двух кнопок: { {Text=, Bg=, Fg=, Callback=}, {...} }
+function Page:AddButtonRow(items)
+	local win = self.Window
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 38)
+	row.BackgroundTransparency = 1
+	row.LayoutOrder = self:_order()
+	row.Parent = self.Frame
+	local out = {}
+	for i = 1, 2 do
+		local it = items[i]
+		if it then
+			local b = makeButton(row, it.Text or "", it.Bg or C.btn, it.Fg or C.text,
+				UDim2.new(0.5, -3, 1, 0), win.Conns)
+			if i == 2 then
+				b.AnchorPoint = Vector2.new(1, 0)
+				b.Position = UDim2.new(1, 0, 0, 0)
+			end
+			if it.Callback then
+				win:Track(b.Activated:Connect(it.Callback))
+			end
+			out[i] = b
+		end
+	end
+	return out
+end
+
+-- Кнопка-«режим»: каждое нажатие — следующий вариант по кругу.
+-- options: { "A", "B" } или { {id="a", label="A"}, ... }
+-- spec: { Default = id, Flag =, Callback = function(id) }
+function Page:AddCycle(prefix, options, spec)
+	spec = spec or {}
+	local win = self.Window
+	local list = {}
+	for _, o in ipairs(options) do
+		if type(o) == "table" then
+			list[#list + 1] = { id = o.id, label = o.label or tostring(o.id) }
+		else
+			list[#list + 1] = { id = o, label = tostring(o) }
+		end
+	end
+	if spec.Default == nil then spec.Default = list[1].id end
+	local get, set = win:_bind(prefix, spec)
+
+	local btn = makeButton(self.Frame, "", C.card, C.text, UDim2.new(1, 0, 0, 32), win.Conns)
+	btn.LayoutOrder = self:_order()
+	btn.Font = Enum.Font.GothamMedium
+	btn.TextSize = 12
+
+	local function indexOf(id)
+		for i, o in ipairs(list) do
+			if o.id == id then return i end
+		end
+		return 1
+	end
+	local function refresh()
+		btn.Text = ("%s: %s  ›"):format(prefix, list[indexOf(get())].label)
+	end
+	win:Track(btn.Activated:Connect(function()
+		set(list[(indexOf(get()) % #list) + 1].id)
+		refresh()
+	end))
+	refresh()
+	win.Refreshers[#win.Refreshers + 1] = refresh
+
+	return {
+		Button = btn,
+		Get = get,
+		Set = function(id)
+			set(id)
+			refresh()
+		end,
+	}
+end
+
+-- Текстовое поле. spec: { Default=, Flag=, Callback = function(text, enter), Live = bool }
+function Page:AddInput(placeholder, spec)
+	spec = spec or {}
+	local win = self.Window
+	if spec.Default == nil then spec.Default = "" end
+	local userCb = spec.Callback
+	local get, set = win:_bind(placeholder, {
+		Flag = spec.Flag,
+		Default = spec.Default,
+		Callback = nil,
+	})
+
+	local box = Instance.new("TextBox")
+	box.LayoutOrder = self:_order()
+	box.Size = UDim2.new(1, 0, 0, 32)
+	box.BackgroundColor3 = C.card
+	box.BorderSizePixel = 0
+	box.Font = Enum.Font.Gotham
+	box.TextSize = 12
+	box.TextColor3 = C.text
+	box.PlaceholderColor3 = C.sub
+	box.PlaceholderText = placeholder or ""
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.ClearTextOnFocus = false
+	box.ClipsDescendants = true
+	box.Text = get() or ""
+	box.Parent = self.Frame
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
+	local qpad = Instance.new("UIPadding", box)
+	qpad.PaddingLeft = UDim.new(0, 10)
+	qpad.PaddingRight = UDim.new(0, 10)
+	local qstroke = Instance.new("UIStroke", box)
+	qstroke.Color = C.yellow
+	qstroke.Transparency = 0.6
+
+	win.Callbacks[spec.Flag or placeholder] = userCb and function(v)
+		box.Text = v
+		userCb(v, false)
+	end or nil
+
+	win:Track(box.FocusLost:Connect(function(enter)
+		set(box.Text)
+		if userCb then userCb(box.Text, enter) end
+	end))
+	if spec.Live then
+		win:Track(box:GetPropertyChangedSignal("Text"):Connect(function()
+			set(box.Text)
+			if userCb then userCb(box.Text, false) end
+		end))
+	end
+	win.Refreshers[#win.Refreshers + 1] = function()
+		box.Text = get() or ""
+	end
+
+	return {
+		Box = box,
+		Get = function() return box.Text end,
+		Set = function(t)
+			box.Text = t
+			set(t)
+		end,
+		SetVisible = function(v) box.Visible = v end,
+	}
+end
+
+-- Карточка «статус + информация» (две строки)
+function Page:AddStatus()
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, 0, 0, 48)
+	card.BackgroundColor3 = C.card
+	card.BorderSizePixel = 0
+	card.LayoutOrder = self:_order()
+	card.Parent = self.Frame
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+
+	local status = Instance.new("TextLabel")
+	status.BackgroundTransparency = 1
+	status.Position = UDim2.fromOffset(10, 5)
+	status.Size = UDim2.new(1, -20, 0, 20)
+	status.Font = Enum.Font.GothamBold
+	status.TextSize = 13
+	status.TextColor3 = C.sub
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.TextTruncate = Enum.TextTruncate.AtEnd
+	status.Text = "Остановлено"
+	status.Parent = card
+
+	local info = Instance.new("TextLabel")
+	info.BackgroundTransparency = 1
+	info.Position = UDim2.fromOffset(10, 26)
+	info.Size = UDim2.new(1, -20, 0, 16)
+	info.Font = Enum.Font.Gotham
+	info.TextSize = 11
+	info.TextColor3 = C.sub
+	info.TextXAlignment = Enum.TextXAlignment.Left
+	info.TextTruncate = Enum.TextTruncate.AtEnd
+	info.Text = ""
+	info.Parent = card
+
+	local lastStatus
+	return {
+		SetStatus = function(text, color)
+			if lastStatus == text then return end -- не трогаем лишний раз (как M.setStatus)
+			lastStatus = text
+			status.Text = text
+			status.TextColor3 = color or C.text
+		end,
+		SetInfo = function(text, color)
+			info.Text = text
+			info.TextColor3 = color or C.sub
+		end,
+	}
+end
+
+
+--[[
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║  BOX FARM — WEB VALLEY STUDIO                                    ║
+    ║  Телепорт к предметам "box" внутри выбранного промежутка зон     ║
+    ╚══════════════════════════════════════════════════════════════════╝
+    Промежутки только парами: 1-2, 3-4, 5-6 ... (никаких 1-7 или 4-8).
+    Зоны ищутся автоматически (объекты с именами 1, 2, 3... / Zone1, Zone2...).
+    Если нашлись не те — впишите путь к папке с зонами в поле "Папка зон".
+]]
+
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+local VIM
+pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+local fpp = (typeof(fireproximityprompt) == "function") and fireproximityprompt or nil
+local fcd = (typeof(fireclickdetector) == "function") and fireclickdetector or nil
+
+------------------------------------------------------------
+-- Настройки (состояние)
+------------------------------------------------------------
+local S = {
+	running = false,
+	pair = 1,            -- номер пары: 1 = зоны 1-2, 2 = зоны 3-4 ...
+	keyword = "box",     -- часть названия предмета
+	zonePath = "",       -- необязательный путь к папке с зонами
+	returnMode = "pair", -- "pair" = первая точка промежутка, "one" = точка 1
+	stopWhenEmpty = false,
+	timeout = 8,         -- лимит секунд на один бокс
+	height = 2,          -- высота над боксом
+	pad = 40,            -- запас вокруг промежутка (studs)
+	holdE = true,
+	usePrompt = true,
+}
+local token = 0
+local zones, zoneRoot, maxZone = {}, nil, 0
+local boxes = {}
+local blacklist = {}
+local eHeld = false
+
+local function trim(s)
+	return (tostring(s):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+------------------------------------------------------------
+-- Поиск зон
+------------------------------------------------------------
+local function isZoneClass(inst)
+	return inst:IsA("PVInstance") or inst:IsA("Folder") or inst:IsA("Attachment")
+end
+
+-- возвращает номер зоны и "вес" (чисто цифровое имя весит больше)
+local function zoneNumber(name)
+	if name:lower():find("box", 1, true) then return nil end
+	local n = name:match("^%s*(%d+)%s*$")
+	if n then return tonumber(n), 2 end
+	n = name:match("^[%a_%s%-]+(%d+)$")
+	if n then return tonumber(n), 1 end
+	return nil
+end
+
+local function resolvePath(path)
+	local cur = game
+	for seg in tostring(path):gmatch("[^%./\\]+") do
+		local nxt = cur:FindFirstChild(seg)
+		if not nxt and cur == game and seg == "Workspace" then nxt = Workspace end
+		if not nxt then return nil end
+		cur = nxt
+	end
+	return cur
+end
+
+local function collectChildren(parent)
+	local found, count = {}, 0
+	for _, ch in ipairs(parent:GetChildren()) do
+		local n = zoneNumber(ch.Name)
+		if n and isZoneClass(ch) and not found[n] then
+			found[n] = ch
+			count += 1
+		end
+	end
+	return found, count
+end
+
+local function scanZones()
+	local bestFound, bestParent
+
+	if S.zonePath ~= "" then
+		local p = resolvePath(S.zonePath)
+		if p then
+			local f, c = collectChildren(p)
+			if c > 0 then bestFound, bestParent = f, p end
+		end
+	end
+
+	if not bestFound then
+		local groups = {}
+		local i = 0
+		for _, inst in ipairs(Workspace:GetDescendants()) do
+			i += 1
+			if i % 4000 == 0 then task.wait() end
+			local n, w = zoneNumber(inst.Name)
+			if n and isZoneClass(inst) then
+				local isChar = inst:IsA("Model") and Players:GetPlayerFromCharacter(inst)
+				if not isChar then
+					local par = inst.Parent
+					local g = groups[par]
+					if not g then
+						g = { found = {}, score = 0 }
+						groups[par] = g
+					end
+					if not g.found[n] then
+						g.found[n] = inst
+						g.score += w
+					end
+				end
+			end
+		end
+		local bestScore = 0
+		for par, g in pairs(groups) do
+			if g.found[1] and g.score > bestScore then
+				bestScore, bestFound, bestParent = g.score, g.found, par
+			end
+		end
+	end
+
+	zones = bestFound or {}
+	zoneRoot = bestParent
+	maxZone = 0
+	for n in pairs(zones) do
+		if n > maxZone then maxZone = n end
+	end
+end
+
+------------------------------------------------------------
+-- Геометрия
+------------------------------------------------------------
+local function addPoint(mn, mx, p)
+	if not mn then return p, p end
+	return Vector3.new(math.min(mn.X, p.X), math.min(mn.Y, p.Y), math.min(mn.Z, p.Z)),
+		Vector3.new(math.max(mx.X, p.X), math.max(mx.Y, p.Y), math.max(mx.Z, p.Z))
+end
+
+local function addBox(mn, mx, cf, size)
+	local hx, hy, hz = size.X / 2, size.Y / 2, size.Z / 2
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sy in ipairs({ -1, 1 }) do
+			for _, sz in ipairs({ -1, 1 }) do
+				mn, mx = addPoint(mn, mx, (cf * CFrame.new(sx * hx, sy * hy, sz * hz)).Position)
+			end
+		end
+	end
+	return mn, mx
+end
+
+local function getBounds(inst)
+	if not inst or not inst.Parent then return nil end
+	local mn, mx
+	if inst:IsA("Attachment") then
+		local p = inst.WorldPosition
+		return p, p
+	elseif inst:IsA("BasePart") then
+		mn, mx = addBox(mn, mx, inst.CFrame, inst.Size)
+	elseif inst:IsA("Model") then
+		local ok, cf, size = pcall(inst.GetBoundingBox, inst)
+		if ok then
+			mn, mx = addBox(mn, mx, cf, size)
+		else
+			local p = inst:GetPivot().Position
+			mn, mx = p, p
+		end
+	else
+		local cnt = 0
+		for _, d in ipairs(inst:GetDescendants()) do
+			if d:IsA("BasePart") then
+				mn, mx = addBox(mn, mx, d.CFrame, d.Size)
+				cnt += 1
+				if cnt >= 400 then break end
+			end
+		end
+	end
+	return mn, mx
+end
+
+local function zonePos(inst)
+	if not inst or not inst.Parent then return nil end
+	if inst:IsA("Attachment") then return inst.WorldPosition end
+	if inst:IsA("PVInstance") then return inst:GetPivot().Position end
+	local mn, mx = getBounds(inst)
+	if mn then return (mn + mx) / 2 end
+	return nil
+end
+
+local function pairLabel(k)
+	return ("%d-%d"):format(2 * k - 1, 2 * k)
+end
+
+-- границы промежутка пары k (объединение двух зон + запас)
+local function rangeBounds(k)
+	local mn, mx
+	for _, n in ipairs({ 2 * k - 1, 2 * k }) do
+		local z = zones[n]
+		if z then
+			local a, b = getBounds(z)
+			if a then
+				mn, mx = addPoint(mn, mx, a)
+				mn, mx = addPoint(mn, mx, b)
+			end
+		end
+	end
+	if not mn then return nil end
+	local pad = Vector3.new(S.pad, S.pad, S.pad)
+	return mn - pad, mx + pad
+end
+
+local function inRange(box, k, mn, mx)
+	for _, n in ipairs({ 2 * k - 1, 2 * k }) do
+		local z = zones[n]
+		if z and z.Parent and box:IsDescendantOf(z) then return true end
+	end
+	if not mn then return false end
+	local p = box:GetPivot().Position
+	return p.X >= mn.X and p.X <= mx.X
+		and p.Y >= mn.Y and p.Y <= mx.Y
+		and p.Z >= mn.Z and p.Z <= mx.Z
+end
+
+------------------------------------------------------------
+-- Поиск боксов (кэш с автообновлением)
+------------------------------------------------------------
+local function isPlayerPart(inst)
+	for _, pl in ipairs(Players:GetPlayers()) do
+		local ch = pl.Character
+		if ch and (inst == ch or inst:IsDescendantOf(ch)) then return true end
+	end
+	return false
+end
+
+local function matchBox(inst)
+	if S.keyword == "" then return false end
+	if not (inst:IsA("Model") or inst:IsA("BasePart")) then return false end
+	if not inst.Name:lower():find(S.keyword, 1, true) then return false end
+	return not isPlayerPart(inst)
+end
+
+local rebuildId = 0
+local function rebuildBoxes()
+	rebuildId += 1
+	local my = rebuildId
+	boxes = {}
+	local i = 0
+	for _, inst in ipairs(Workspace:GetDescendants()) do
+		if my ~= rebuildId then return end
+		i += 1
+		if i % 4000 == 0 then task.wait() end
+		if matchBox(inst) then boxes[inst] = true end
+	end
+end
+
+local function alive(inst)
+	return inst.Parent ~= nil and inst:IsDescendantOf(Workspace)
+end
+
+local function hasBoxAncestor(inst)
+	local p = inst.Parent
+	while p and p ~= Workspace do
+		if boxes[p] then return true end
+		p = p.Parent
+	end
+	return false
+end
+
+-- ближайший бокс в выбранном промежутке; второй результат — сколько их всего
+local function pickTarget(fromPos)
+	local now = os.clock()
+	local mn, mx = rangeBounds(S.pair)
+	local best, bestD, count = nil, math.huge, 0
+	for b in pairs(boxes) do
+		if not alive(b) then
+			boxes[b] = nil
+		elseif not (blacklist[b] and blacklist[b] > now)
+			and not hasBoxAncestor(b) and inRange(b, S.pair, mn, mx) then
+			count += 1
+			local d = (b:GetPivot().Position - fromPos).Magnitude
+			if d < bestD then best, bestD = b, d end
+		end
+	end
+	return best, count
+end
+
+------------------------------------------------------------
+-- Действия
+------------------------------------------------------------
+local function setE(down)
+	if down == eHeld then return end
+	if down and not (S.holdE and VIM) then return end
+	eHeld = down
+	pcall(function() VIM:SendKeyEvent(down, Enum.KeyCode.E, false, game) end)
+end
+
+local function tpTo(hrp, pos)
+	hrp.CFrame = CFrame.new(pos) * hrp.CFrame.Rotation
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function homePos()
+	local k = (S.returnMode == "pair") and (2 * S.pair - 1) or 1
+	local z = zones[k] or zones[2 * S.pair] or zones[1]
+	local p = z and zonePos(z)
+	return p and (p + Vector3.new(0, 4, 0)) or nil
+end
+
+local function gatherInteractables(box)
+	local prompts, clicks = {}, {}
+	for _, d in ipairs(box:GetDescendants()) do
+		if d:IsA("ProximityPrompt") then
+			prompts[#prompts + 1] = d
+		elseif d:IsA("ClickDetector") then
+			clicks[#clicks + 1] = d
+		end
+	end
+	return prompts, clicks
+end
+
+------------------------------------------------------------
+-- МЕНЮ (визуал и подключение — как в MenuLib)
+------------------------------------------------------------
+scanZones()
+
+local Win = MenuLib.new({
+	Name = "BoxFarmGUI",
+	Title = "WEB VALLEY",
+	Subtitle = "STUDIO · BOX FARM",
+	ShowFPS = true,
+})
+
+local Main = Win:AddTab("ФАРМ")
+local Cfg = Win:AddTab("НАСТРОЙКИ")
+
+local status
+
+-- Вкладка ФАРМ
+Main:AddSection("АВТОФАРМ БОКСОВ")
+status = Main:AddStatus()
+status.SetStatus("Остановлено", C.sub)
+status.SetInfo(maxZone > 0 and ("Зон найдено: %d"):format(maxZone) or "Зоны не найдены (см. НАСТРОЙКИ)")
+
+local pairOptions = {}
+local pairsCount = (maxZone > 0) and math.max(1, math.ceil(maxZone / 2)) or 20
+for k = 1, pairsCount do
+	pairOptions[#pairOptions + 1] = { id = k, label = pairLabel(k) }
+end
+
+Main:AddCycle("Промежуток", pairOptions, {
+	Default = 1,
+	Callback = function(id)
+		S.pair = id
+		blacklist = {}
+	end,
+})
+Main:AddNote("Только пары: 1-2, 3-4, 5-6 … Нажимайте, чтобы листать.", 28)
+
+local start, stop
+Main:AddButtonRow({
+	{ Text = "▶ СТАРТ", Bg = C.yellow, Fg = C.black, Callback = function() start() end },
+	{ Text = "■ СТОП", Callback = function() stop() end },
+})
+
+-- Вкладка НАСТРОЙКИ
+Cfg:AddSection("ФАРМ")
+Cfg:AddToggle("Зажимать кнопку E", {
+	Default = true,
+	Callback = function(v)
+		S.holdE = v
+		if not v then setE(false) end
+	end,
+})
+Cfg:AddToggle("Нажимать prompt / click", {
+	Default = true,
+	Callback = function(v) S.usePrompt = v end,
+})
+Cfg:AddToggle("Стоп, когда зона пуста", {
+	Default = false,
+	Callback = function(v) S.stopWhenEmpty = v end,
+})
+Cfg:AddCycle("Возврат", {
+	{ id = "pair", label = "первая точка промежутка" },
+	{ id = "one", label = "точка 1" },
+}, {
+	Default = "pair",
+	Callback = function(id) S.returnMode = id end,
+})
+Cfg:AddNumber("Лимит на бокс, сек", {
+	Default = 8, Min = 1, Max = 60, Step = 1, Dec = 0,
+	Callback = function(v) S.timeout = v end,
+})
+Cfg:AddNumber("Высота над боксом", {
+	Default = 2, Min = -10, Max = 30, Step = 1, Dec = 0,
+	Callback = function(v) S.height = v end,
+})
+Cfg:AddNumber("Запас промежутка", {
+	Default = 40, Min = 0, Max = 500, Step = 10, Dec = 0,
+	Callback = function(v) S.pad = v end,
+})
+
+Cfg:AddSection("ПОИСК")
+Cfg:AddInput("Слово в названии (box)", {
+	Default = "box",
+	Callback = function(text)
+		S.keyword = trim(text):lower()
+		task.spawn(rebuildBoxes)
+	end,
+})
+Cfg:AddInput("Папка зон, напр. Workspace.Zones", {
+	Default = "",
+	Callback = function(text)
+		S.zonePath = trim(text)
+	end,
+})
+Cfg:AddButton("Пересканировать зоны", function()
+	task.spawn(function()
+		status.SetInfo("Сканирую зоны...", C.sub)
+		scanZones()
+		if maxZone > 0 then
+			local where = zoneRoot and zoneRoot.Name or "?"
+			status.SetInfo(("Зон: %d · папка: %s"):format(maxZone, where), C.sub)
+		else
+			status.SetInfo("Зоны не найдены — укажите папку зон", C.sub)
+		end
+	end)
+end)
+Cfg:AddNote("Список промежутков строится при запуске скрипта.", 28)
+
+------------------------------------------------------------
+-- Цикл фарма
+------------------------------------------------------------
+local function farmLoop(my)
+	local function ok()
+		return S.running and token == my and Win.Alive
+	end
+
+	if not zones[1] then
+		status.SetStatus("Поиск зон...", C.yellow)
+		scanZones()
+	end
+
+	local collected = 0
+	local homed = false
+
+	while ok() do
+		local a, b = 2 * S.pair - 1, 2 * S.pair
+		if not zones[a] and not zones[b] then
+			status.SetInfo(("Зона %s не найдена"):format(pairLabel(S.pair)), C.sub)
+			stop("Нет зоны")
+			return
+		end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+		if not hrp or not hum or hum.Health <= 0 then
+			status.SetStatus("Ожидание персонажа...", C.sub)
+			homed = false
+			task.wait(0.5)
+		else
+			local target, count = pickTarget(hrp.Position)
+			if not target then
+				if not homed then
+					local hp = homePos()
+					if hp then tpTo(hrp, hp) end
+					homed = true
+				end
+				status.SetStatus(("Зона %s пуста"):format(pairLabel(S.pair)), C.text)
+				status.SetInfo(("Собрано: %d · жду новые боксы"):format(collected), C.sub)
+				if S.stopWhenEmpty then
+					stop("Зона очищена")
+					return
+				end
+				task.wait(0.4)
+			else
+				homed = false
+				status.SetStatus(("Фарм %s: %s"):format(pairLabel(S.pair), target.Name), C.yellow)
+				status.SetInfo(("Собрано: %d · осталось: %d"):format(collected, count), C.sub)
+
+				local prompts, clicks = gatherInteractables(target)
+				local t0 = os.clock()
+				local lastFire, lastGather = 0, t0
+				setE(true)
+
+				while ok() and alive(target) and os.clock() - t0 < S.timeout do
+					local c = LocalPlayer.Character
+					local h = c and c:FindFirstChild("HumanoidRootPart")
+					if not h then break end
+					tpTo(h, target:GetPivot().Position + Vector3.new(0, S.height, 0))
+
+					local now = os.clock()
+					if S.usePrompt and now - lastFire > 0.1 then
+						lastFire = now
+						if now - lastGather > 1 then
+							lastGather = now
+							prompts, clicks = gatherInteractables(target)
+						end
+						if fpp then
+							for _, p in ipairs(prompts) do
+								if p.Parent and p.Enabled then pcall(fpp, p) end
+							end
+						end
+						if fcd then
+							for _, cd in ipairs(clicks) do
+								if cd.Parent then pcall(fcd, cd) end
+							end
+						end
+					end
+					RunService.Heartbeat:Wait()
+				end
+
+				setE(false)
+				if alive(target) then
+					blacklist[target] = os.clock() + 20 -- завис — пропускаем на время
+				else
+					collected += 1
+				end
+
+				if ok() then
+					local c = LocalPlayer.Character
+					local h = c and c:FindFirstChild("HumanoidRootPart")
+					local hp = homePos()
+					if h and hp then tpTo(h, hp) end
+					homed = true
+					task.wait(0.15)
+				end
+			end
+		end
+	end
+end
+
+start = function()
+	if S.running then return end
+	S.running = true
+	token += 1
+	local my = token
+	status.SetStatus("Запуск...", C.yellow)
+	task.spawn(function() farmLoop(my) end)
+end
+
+stop = function(reason)
+	S.running = false
+	token += 1
+	setE(false)
+	status.SetStatus(reason or "Остановлено", C.sub)
+end
+
+------------------------------------------------------------
+-- Кэш боксов + очистка
+------------------------------------------------------------
+Win:Track(Workspace.DescendantAdded:Connect(function(inst)
+	if matchBox(inst) then boxes[inst] = true end
+end))
+Win:Track(Workspace.DescendantRemoving:Connect(function(inst)
+	boxes[inst] = nil
+end))
+task.spawn(rebuildBoxes)
+
+Win.OnDestroy = function()
+	S.running = false
+	token += 1
+	rebuildId += 1
+	setE(false)
+end
