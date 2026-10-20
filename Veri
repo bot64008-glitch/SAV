@@ -1365,6 +1365,28 @@ end
 ------------------------------------------------------------
 local origWalk
 
+-- один кадр движения к точке: стик + скорость по направлению (без прыжков по координатам)
+local function driveTo(hrp, hum, pos)
+	local off = Vector3.new(pos.X - hrp.Position.X, 0, pos.Z - hrp.Position.Z)
+	local flat = off.Magnitude
+	if flat < 0.01 then return flat end
+	local dir = off.Unit
+	-- у цели замедляемся, чтобы не проскочить на большой скорости
+	local spd = math.clamp(flat * 10, 16, S.speed)
+	origWalk = origWalk or hum.WalkSpeed
+	hum.WalkSpeed = spd
+	hum:Move(dir, false)
+	local v = hrp.AssemblyLinearVelocity
+	hrp.AssemblyLinearVelocity = Vector3.new(dir.X * spd, v.Y, dir.Z * spd)
+	return flat
+end
+
+local function haltMove(hrp, hum)
+	hum:Move(Vector3.zero, false)
+	local v = hrp.AssemblyLinearVelocity
+	hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+end
+
 -- идёт к точке; true — дошёл, false — прервано
 local function walkTo(pos, ok, stopCond, maxTime)
 	local t0 = os.clock()
@@ -1372,13 +1394,13 @@ local function walkTo(pos, ok, stopCond, maxTime)
 		local _, hrp, hum = getChar()
 		if not hrp then return false end
 		local flat = Vector3.new(pos.X - hrp.Position.X, 0, pos.Z - hrp.Position.Z).Magnitude
-		if flat < 2.5 then return true end
+		if flat < 2.5 then
+			haltMove(hrp, hum)
+			return true
+		end
 		if stopCond and stopCond() then return false end
 		if maxTime and os.clock() - t0 > maxTime then return false end
-		origWalk = origWalk or hum.WalkSpeed
-		-- у цели замедляемся, чтобы не проскочить на большой скорости
-		hum.WalkSpeed = math.clamp(flat * 10, 16, S.speed)
-		hum:MoveTo(pos)
+		driveTo(hrp, hum, pos)
 		RunService.Heartbeat:Wait()
 	end
 	return false
@@ -1392,7 +1414,7 @@ local function cleanup()
 	local _, hrp, hum = getChar()
 	if hum then
 		hum.WalkSpeed = origWalk or 16
-		if hrp then hum:MoveTo(hrp.Position) end
+		if hrp then haltMove(hrp, hum) end
 	end
 	origWalk = nil
 end
@@ -1613,9 +1635,11 @@ local function farmLoop(my)
 							end
 						end
 
-						local flat = Vector3.new(pos0.X - h.Position.X, 0, pos0.Z - h.Position.Z).Magnitude
-						m.WalkSpeed = math.clamp(flat * 10, 16, S.speed)
-						m:MoveTo(pos0)
+						if Vector3.new(pos0.X - h.Position.X, 0, pos0.Z - h.Position.Z).Magnitude < 2.5 then
+							haltMove(h, m)
+						else
+							driveTo(h, m, pos0)
+						end
 						RunService.Heartbeat:Wait()
 					end
 					setE(false)
