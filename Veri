@@ -1425,7 +1425,7 @@ end
 local Win = MenuLib.new({
 	Name = "BoxFarmGUI",
 	Title = "WEB VALLEY",
-	Subtitle = "STUDIO · BOX FARM",
+	Subtitle = "STUDIO · BOX FARM v3 (ходьба)",
 	ShowFPS = true,
 })
 
