@@ -1053,658 +1053,655 @@ end
 
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
-    ║  BOX FARM — WEB VALLEY STUDIO                                    ║
-    ║  Телепорт к предметам "box" внутри выбранного промежутка зон     ║
+    ║  BOX FARM — автофарм боксов по промежуткам между точками         ║
+    ║  Меню: MenuLib (WEB VALLEY STUDIO)                               ║
     ╚══════════════════════════════════════════════════════════════════╝
-    Промежутки только парами: 1-2, 3-4, 5-6 ... (никаких 1-7 или 4-8).
-    Точки зон вписаны вручную в таблицу POINTS ниже.
+
+    КАК РАБОТАЕТ
+    • Выбираешь промежуток: только соседние точки (1→2, 2→3 … 12→13).
+    • В промежутке ищутся объекты, в имени которых есть "box" (любой регистр:
+      Box, boxing, box173hsjbc …) — по координате X между двумя точками.
+    • Персонаж бежит к ближайшему боксу (WalkSpeed 700) с зажатой E.
+    • Если бокс хоть чуть-чуть сдвинулся — бег в ПЕРВУЮ точку промежутка,
+      потом заново ищется бокс. Так, пока в промежутке ничего не останется.
+    • Когда боксов нет — персонаж ждёт у первой точки (новые боксы подхватятся).
+
+    ПРИ СТАРТЕ
+    1) Создаётся огромный невидимый пол с коллизией (один раз, потом остаётся).
+    2) У всех остальных объектов отключается коллизия (персонажей не трогаем).
+    3) Если X игрока <= 157 — его ставят в позицию 1, и только потом начинается фарм.
+    ПРИ СТОПЕ — коллизия возвращается, пол остаётся.
 ]]
 
+------------------------------------------------------------
+-- BOX FARM
+------------------------------------------------------------
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
+
 local VIM
 pcall(function() VIM = game:GetService("VirtualInputManager") end)
 
-local fpp = (typeof(fireproximityprompt) == "function") and fireproximityprompt or nil
-local fcd = (typeof(fireclickdetector) == "function") and fireclickdetector or nil
-
-------------------------------------------------------------
--- Настройки (состояние)
-------------------------------------------------------------
-local S = {
-	running = false,
-	pair = 1,            -- номер пары: 1 = зоны 1-2, 2 = зоны 3-4 ...
-	keyword = "box",     -- часть названия предмета
-	returnMode = "one",  -- "one" = точка 1, "pair" = первая точка промежутка
-	stopWhenEmpty = false,
-	timeout = 8,         -- лимит секунд на один бокс (после прибытия)
-	speed = 700,         -- скорость ходьбы (studs/сек)
-	speed = 700,         -- скорость ходьбы
-	pause = 0.6,         -- пауза на точке возврата, сек
-	padX = 20,           -- запас промежутка вдоль X (studs)
-	padYZ = 80,          -- запас в стороны и по высоте (studs)
-	holdE = true,
-	usePrompt = true,
-}
-local token = 0
-local boxes = {}
-local blacklist = {}
-local eHeld = false
-local START_X = 157      -- если X игрока <= этого, при старте сначала идём на точку 1
-local floorFolder, floorMade = nil, false
-local disabled = {}      -- части, у которых мы отключили коллизию
-local collisionActive, collConn = false, nil
-
-local function trim(s)
-	return (tostring(s):gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
-------------------------------------------------------------
--- Точки зон (X, Y, Z)
-------------------------------------------------------------
+-- Координаты точек (X, Y, Z)
 local POINTS = {
-	Vector3.new(157.9, 3.1, -61.4),   -- 1
-	Vector3.new(249.3, 3.1, -57.7),   -- 2
-	Vector3.new(403.3, 3.1, -60.4),   -- 3
-	Vector3.new(634.4, 3.1, -58.1),   -- 4
-	Vector3.new(961.9, 3.1, -61.7),   -- 5
-	Vector3.new(1319.5, 3.1, -51.4),  -- 6
-	Vector3.new(1687.4, 3.1, -64.2),  -- 7
-	Vector3.new(2043.6, 3.1, -57.5),  -- 8
-	Vector3.new(2475.9, 3.1, -55.3),  -- 9
-	Vector3.new(3000.1, 3.1, -57.5),  -- 10
-	Vector3.new(3595.7, 3.1, -56.8),  -- 11
-	Vector3.new(4287.6, 3.1, -73.0),  -- 12
-	Vector3.new(5052.4, 3.1, -63.6),  -- 13
+	Vector3.new(157.9, 3.1, -61.4),
+	Vector3.new(249.3, 3.1, -57.7),
+	Vector3.new(403.3, 3.1, -60.4),
+	Vector3.new(634.4, 3.1, -58.1),
+	Vector3.new(961.9, 3.1, -61.7),
+	Vector3.new(1319.5, 3.1, -51.4),
+	Vector3.new(1687.4, 3.1, -64.2),
+	Vector3.new(2043.6, 3.1, -57.5),
+	Vector3.new(2475.9, 3.1, -55.3),
+	Vector3.new(3000.1, 3.1, -57.5),
+	Vector3.new(3595.7, 3.1, -56.8),
+	Vector3.new(4287.6, 3.1, -73.0),
+	Vector3.new(5052.4, 3.1, -63.6),
 }
-local maxZone = #POINTS
+local ZONE_COUNT = #POINTS - 1 -- 12 промежутков: 1→2 … 12→13
 
-local function addPoint(mn, mx, p)
-	if not mn then return p, p end
-	return Vector3.new(math.min(mn.X, p.X), math.min(mn.Y, p.Y), math.min(mn.Z, p.Z)),
-		Vector3.new(math.max(mx.X, p.X), math.max(mx.Y, p.Y), math.max(mx.Z, p.Z))
-end
+local START_X_LIMIT = 157 -- если X игрока <= этого значения, при старте его ставят в позицию 1
+local FLOOR_TILE = 2048 -- макс. размер одной части в Roblox, поэтому пол собран из плиток
+local FLOOR_TRANSPARENCY = 1 -- 1 = пол невидимый, 0 = видимый
 
--- пара k = точки (2k-1) и 2k; последняя непарная точка идёт одна
-local function pairLabel(k)
-	local a, b = 2 * k - 1, 2 * k
-	if b > maxZone then return tostring(a) end
-	return ("%d-%d"):format(a, b)
-end
-
--- границы промежутка: коробка между двумя точками + запас
-local function rangeBounds(k)
-	local mn, mx
-	for _, n in ipairs({ 2 * k - 1, 2 * k }) do
-		local p = POINTS[n]
-		if p then mn, mx = addPoint(mn, mx, p) end
-	end
-	if not mn then return nil end
-	local pad = Vector3.new(S.padX, S.padYZ, S.padYZ)
-	return mn - pad, mx + pad
-end
-
-local function inRange(box, k, mn, mx)
-	if not mn then return false end
-	local p = box:GetPivot().Position
-	return p.X >= mn.X and p.X <= mx.X
-		and p.Y >= mn.Y and p.Y <= mx.Y
-		and p.Z >= mn.Z and p.Z <= mx.Z
-end
+local farm = {
+	running = false,
+	token = 0,
+	move = nil, -- куда сейчас идти (направление), применяется каждый кадр
+	holdingE = false,
+	origSpeed = nil,
+	matched = {}, -- все найденные объекты с "box" в имени
+	blacklist = {}, -- [объект] = до какого времени игнорировать
+	addedConn = nil,
+	charConn = nil,
+	collisions = {}, -- [часть] = true — у кого мы выключили CanCollide
+	floorFolder = nil,
+}
 
 ------------------------------------------------------------
--- Поиск боксов (кэш с автообновлением)
-------------------------------------------------------------
-local function isPlayerPart(inst)
-	for _, pl in ipairs(Players:GetPlayers()) do
-		local ch = pl.Character
-		if ch and (inst == ch or inst:IsDescendantOf(ch)) then return true end
-	end
-	return false
-end
-
-local function matchBox(inst)
-	if S.keyword == "" then return false end
-	if not (inst:IsA("Model") or inst:IsA("BasePart")) then return false end
-	if not inst.Name:lower():find(S.keyword, 1, true) then return false end
-	if floorFolder and inst:IsDescendantOf(floorFolder) then return false end
-	return not isPlayerPart(inst)
-end
-
-local rebuildId = 0
-local function rebuildBoxes()
-	rebuildId += 1
-	local my = rebuildId
-	boxes = {}
-	local i = 0
-	for _, inst in ipairs(Workspace:GetDescendants()) do
-		if my ~= rebuildId then return end
-		i += 1
-		if i % 4000 == 0 then task.wait() end
-		if matchBox(inst) then boxes[inst] = true end
-	end
-end
-
-local function alive(inst)
-	return inst.Parent ~= nil and inst:IsDescendantOf(Workspace)
-end
-
-local function hasBoxAncestor(inst)
-	local p = inst.Parent
-	while p and p ~= Workspace do
-		if boxes[p] then return true end
-		p = p.Parent
-	end
-	return false
-end
-
-local taken = setmetatable({}, { __mode = "k" }) -- унесённые боксы: бокс -> исходная позиция
-
--- ближайший бокс в выбранном промежутке; второй результат — сколько их всего
-local function pickTarget(fromPos)
-	local now = os.clock()
-	local mn, mx = rangeBounds(S.pair)
-	local best, bestD, count = nil, math.huge, 0
-	for b in pairs(boxes) do
-		if not alive(b) then
-			boxes[b] = nil
-		else
-			local pos = b:GetPivot().Position
-			local skip = false
-			if blacklist[b] and blacklist[b] > now then skip = true end
-			local t = taken[b]
-			if t then
-				if (pos - t).Magnitude < 6 then taken[b] = nil else skip = true end
-			end
-			if not skip and isPlayerPart(b) then skip = true end
-			if not skip and not hasBoxAncestor(b) and inRange(b, S.pair, mn, mx) then
-				count += 1
-				local d = (pos - fromPos).Magnitude
-				if d < bestD then best, bestD = b, d end
-			end
-		end
-	end
-	return best, count
-end
-
-------------------------------------------------------------
--- Действия
-------------------------------------------------------------
-local START_X = 157 -- если игрок на X <= 157, сначала идём на точку 1
-
-local function setE(down)
-	if down == eHeld then return end
-	if down and not (S.holdE and VIM) then return end
-	eHeld = down
-	pcall(function() VIM:SendKeyEvent(down, Enum.KeyCode.E, false, game) end)
-end
-
-local function homePos()
-	local k = (S.returnMode == "pair") and (2 * S.pair - 1) or 1
-	return POINTS[k] or POINTS[1]
-end
-
-local function gatherInteractables(box)
-	local prompts, clicks = {}, {}
-	for _, d in ipairs(box:GetDescendants()) do
-		if d:IsA("ProximityPrompt") then
-			prompts[#prompts + 1] = d
-		elseif d:IsA("ClickDetector") then
-			clicks[#clicks + 1] = d
-		end
-	end
-	return prompts, clicks
-end
-
-local function charOf(inst)
-	local a = inst
-	while a and a ~= Workspace do
-		if a:IsA("Model") and Players:GetPlayerFromCharacter(a) then return a end
-		a = a.Parent
-	end
-	return nil
-end
-
-local function getChar()
-	local c = LocalPlayer.Character
-	local h = c and c:FindFirstChild("HumanoidRootPart")
-	local m = c and c:FindFirstChildOfClass("Humanoid")
-	if h and m and m.Health > 0 then return c, h, m end
-	return nil
-end
-
-------------------------------------------------------------
--- Пол (создаётся один раз и остаётся) и коллизии
-------------------------------------------------------------
-local FLOOR_NAME = "BoxFarm_Floor"
-local TILE = 2048 -- максимальный размер одной детали в Roblox
-local floorFolder = nil
-
-local function ensureFloor(hrp)
-	local existing = Workspace:FindFirstChild(FLOOR_NAME)
-	if existing and #existing:GetChildren() > 0 then
-		floorFolder = existing
-		return
-	end
-
-	-- уровень земли под ногами
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = { LocalPlayer.Character }
-	local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -100, 0), params)
-	local groundY = hit and hit.Position.Y or (hrp.Position.Y - 3)
-
-	local folder = Instance.new("Folder")
-	folder.Name = FLOOR_NAME
-	local thick = 4
-	local y = groundY - 0.05 - thick / 2
-	-- сетка 10 x 6 плиток: X от -6144 до 14336, Z от -6144 до 6144
-	for xi = 0, 9 do
-		for zi = 0, 5 do
-			local p = Instance.new("Part")
-			p.Name = "Tile"
-			p.Anchored = true
-			p.CanCollide = true
-			p.CanTouch = false
-			p.CanQuery = false
-			p.CastShadow = false
-			p.Material = Enum.Material.SmoothPlastic
-			p.Color = Color3.fromRGB(40, 40, 40)
-			p.Transparency = 0.7
-			p.Size = Vector3.new(TILE, thick, TILE)
-			p.Position = Vector3.new(-6144 + TILE / 2 + TILE * xi, y, -6144 + TILE / 2 + TILE * zi)
-			p.Parent = folder
-		end
-	end
-	folder.Parent = Workspace
-	floorFolder = folder
-end
-
-local collSaved = {}
-local collConn
-
-local function noclipOne(p)
-	if p:IsA("BasePart") and not p:IsA("Terrain") and p.CanCollide
-		and not (floorFolder and p:IsDescendantOf(floorFolder))
-		and not charOf(p) then
-		collSaved[p] = true
-		p.CanCollide = false
-	end
-end
-
-local function restoreCollision()
-	if collConn then
-		collConn:Disconnect()
-		collConn = nil
-	end
-	for p in pairs(collSaved) do
-		if p.Parent then pcall(function() p.CanCollide = true end) end
-	end
-	collSaved = {}
-end
-
--- true, если дошло до конца; false, если фарм остановили по пути
-local function applyNoclip(my)
-	collConn = Workspace.DescendantAdded:Connect(function(inst)
-		pcall(noclipOne, inst)
-	end)
-	local i = 0
-	for _, inst in ipairs(Workspace:GetDescendants()) do
-		i += 1
-		if i % 3000 == 0 then
-			task.wait()
-			if token ~= my then return false end
-		end
-		noclipOne(inst)
-	end
-	return true
-end
-
-------------------------------------------------------------
--- Быстрая ходьба
-------------------------------------------------------------
-local origWalk
-
--- один кадр движения к точке: стик + скорость по направлению (без прыжков по координатам)
-local function driveTo(hrp, hum, pos)
-	local off = Vector3.new(pos.X - hrp.Position.X, 0, pos.Z - hrp.Position.Z)
-	local flat = off.Magnitude
-	if flat < 0.01 then return flat end
-	local dir = off.Unit
-	-- у цели замедляемся, чтобы не проскочить на большой скорости
-	local spd = math.clamp(flat * 10, 16, S.speed)
-	origWalk = origWalk or hum.WalkSpeed
-	hum.WalkSpeed = spd
-	hum:Move(dir, false)
-	local v = hrp.AssemblyLinearVelocity
-	hrp.AssemblyLinearVelocity = Vector3.new(dir.X * spd, v.Y, dir.Z * spd)
-	return flat
-end
-
-local function haltMove(hrp, hum)
-	hum:Move(Vector3.zero, false)
-	local v = hrp.AssemblyLinearVelocity
-	hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-end
-
--- идёт к точке; true — дошёл, false — прервано
-local function walkTo(pos, ok, stopCond, maxTime)
-	local t0 = os.clock()
-	while ok() do
-		local _, hrp, hum = getChar()
-		if not hrp then return false end
-		local flat = Vector3.new(pos.X - hrp.Position.X, 0, pos.Z - hrp.Position.Z).Magnitude
-		if flat < 2.5 then
-			haltMove(hrp, hum)
-			return true
-		end
-		if stopCond and stopCond() then return false end
-		if maxTime and os.clock() - t0 > maxTime then return false end
-		driveTo(hrp, hum, pos)
-		RunService.Heartbeat:Wait()
-	end
-	return false
-end
-
-local function cleanup()
-	S.running = false
-	token += 1
-	setE(false)
-	restoreCollision()
-	local _, hrp, hum = getChar()
-	if hum then
-		hum.WalkSpeed = origWalk or 16
-		if hrp then haltMove(hrp, hum) end
-	end
-	origWalk = nil
-end
-
-------------------------------------------------------------
--- МЕНЮ (визуал и подключение — как в MenuLib)
+-- Меню
 ------------------------------------------------------------
 local Win = MenuLib.new({
 	Name = "BoxFarmGUI",
-	Title = "WEB VALLEY",
-	Subtitle = "STUDIO · BOX FARM v3 (ходьба)",
-	ShowFPS = true,
+	Title = "BOX FARM",
+	Subtitle = "STUDIO · AUTO",
 })
 
-local Main = Win:AddTab("ФАРМ")
-local Cfg = Win:AddTab("НАСТРОЙКИ")
+local farmTab = Win:AddTab("ФАРМ")
+local setTab = Win:AddTab("НАСТРОЙКИ")
 
-local status
-
--- Вкладка ФАРМ
-Main:AddSection("АВТОФАРМ БОКСОВ")
-status = Main:AddStatus()
-status.SetStatus("Остановлено", C.sub)
-status.SetInfo(("Точек: %d"):format(maxZone))
-
-local pairOptions = {}
-local pairsCount = math.ceil(maxZone / 2)
-for k = 1, pairsCount do
-	pairOptions[#pairOptions + 1] = { id = k, label = pairLabel(k) }
+local function currentZone()
+	return math.clamp(math.floor((Win.Flags.zone or 1) + 0.5), 1, ZONE_COUNT)
 end
 
-Main:AddCycle("Промежуток", pairOptions, {
-	Default = 1,
-	Callback = function(id)
-		S.pair = id
-		blacklist = {}
-	end,
-})
-Main:AddNote("Только пары: 1-2, 3-4, 5-6 … Нажимайте, чтобы листать.", 28)
-
-local start, stop
-Main:AddButtonRow({
-	{ Text = "▶ СТАРТ", Bg = C.yellow, Fg = C.black, Callback = function() start() end },
-	{ Text = "■ СТОП", Callback = function() stop() end },
-})
-
--- Вкладка НАСТРОЙКИ
-Cfg:AddSection("ФАРМ")
-Cfg:AddToggle("Зажимать кнопку E", {
-	Default = true,
-	Callback = function(v)
-		S.holdE = v
-		if not v then setE(false) end
-	end,
-})
-Cfg:AddToggle("Нажимать prompt / click", {
-	Default = true,
-	Callback = function(v) S.usePrompt = v end,
-})
-Cfg:AddToggle("Стоп, когда зона пуста", {
-	Default = false,
-	Callback = function(v) S.stopWhenEmpty = v end,
-})
-Cfg:AddCycle("Возврат", {
-	{ id = "one", label = "точка 1" },
-	{ id = "pair", label = "первая точка промежутка" },
-}, {
-	Default = "one",
-	Callback = function(id) S.returnMode = id end,
-})
-Cfg:AddNumber("Скорость ходьбы", {
-	Default = 700, Min = 16, Max = 1500, Step = 50, Dec = 0,
-	Callback = function(v) S.speed = v end,
-})
-Cfg:AddNumber("Лимит на бокс, сек", {
-	Default = 8, Min = 1, Max = 60, Step = 1, Dec = 0,
-	Callback = function(v) S.timeout = v end,
-})
-Cfg:AddNumber("Пауза на точке, сек", {
-	Default = 0.6, Min = 0, Max = 5, Step = 0.1, Dec = 1,
-	Callback = function(v) S.pause = v end,
-})
-Cfg:AddNumber("Запас вдоль X", {
-	Default = 20, Min = 0, Max = 300, Step = 10, Dec = 0,
-	Callback = function(v) S.padX = v end,
-})
-Cfg:AddNumber("Запас в стороны/высота", {
-	Default = 80, Min = 0, Max = 500, Step = 10, Dec = 0,
-	Callback = function(v) S.padYZ = v end,
-})
-
-Cfg:AddSection("ПОИСК")
-Cfg:AddInput("Слово в названии (box)", {
-	Default = "box",
-	Callback = function(text)
-		S.keyword = trim(text):lower()
-		task.spawn(rebuildBoxes)
-	end,
-})
+local function zoneText(z)
+	return ("Зона %d → %d"):format(z, z + 1)
+end
 
 ------------------------------------------------------------
--- Цикл фарма
+-- Ввод: удержание E
 ------------------------------------------------------------
-local function farmLoop(my)
-	local function ok()
-		return S.running and token == my and Win.Alive
+local function setE(down)
+	if farm.holdingE == down then return end
+	farm.holdingE = down
+	if VIM then
+		pcall(function()
+			VIM:SendKeyEvent(down, Enum.KeyCode.E, false, game)
+		end)
 	end
+end
 
-	-- ждём персонажа
-	local hrp0
-	while ok() do
-		local _, h = getChar()
-		if h then hrp0 = h break end
-		status.SetStatus("Ожидание персонажа...", C.sub)
-		task.wait(0.5)
+------------------------------------------------------------
+-- Персонаж
+------------------------------------------------------------
+local function getChar()
+	local char = LocalPlayer.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if hum and root and hum.Health > 0 then
+		return char, hum, root
 	end
-	if not ok() then return end
+end
 
-	-- пол (один раз) и отключение коллизий
-	status.SetStatus("Готовлю пол и коллизии...", C.yellow)
-	ensureFloor(hrp0)
-	if not applyNoclip(my) then
-		restoreCollision()
+------------------------------------------------------------
+-- Поиск боксов
+------------------------------------------------------------
+local function nameMatch(inst)
+	if not (inst:IsA("BasePart") or inst:IsA("Model")) then return false end
+	return string.find(string.lower(inst.Name), "box", 1, true) ~= nil
+end
+
+local function inWorld(inst)
+	return inst:IsDescendantOf(Workspace)
+end
+
+local function posOf(inst)
+	if inst:IsA("BasePart") then
+		return inst.Position
+	end
+	local ok, cf = pcall(inst.GetPivot, inst)
+	if ok and cf then return cf.Position end
+end
+
+------------------------------------------------------------
+-- Пол и коллизия
+------------------------------------------------------------
+-- Огромный пол с коллизией. Создаётся ОДИН раз и после остановки не удаляется.
+local function buildFloor()
+	if farm.floorFolder and farm.floorFolder.Parent then return end
+	local folder = Workspace:FindFirstChild("FarmFloorFolder")
+	if folder and #folder:GetChildren() > 0 then
+		farm.floorFolder = folder
 		return
 	end
+	if folder then folder:Destroy() end
 
-	local collected = 0
-	local homed = false
-	local needStart = true
+	folder = Instance.new("Folder")
+	folder.Name = "FarmFloorFolder"
+	local top = POINTS[1].Y - 3 -- уровень ступней персонажа
+	local step = FLOOR_TILE - 8 -- небольшой нахлёст, чтобы не было щелей
+	for x = -6000, 11000, step do
+		for z = -6000, 6000, step do
+			local part = Instance.new("Part")
+			part.Name = "FarmFloor"
+			part.Anchored = true
+			part.CanCollide = true
+			part.CanTouch = false
+			part.Locked = true
+			part.CastShadow = false
+			part.Material = Enum.Material.SmoothPlastic
+			part.Color = Color3.fromRGB(30, 30, 30)
+			part.Transparency = FLOOR_TRANSPARENCY
+			part.Size = Vector3.new(FLOOR_TILE, 4, FLOOR_TILE)
+			part.Position = Vector3.new(x, top - 2, z)
+			part.Parent = folder
+		end
+	end
+	folder.Parent = Workspace
+	farm.floorFolder = folder
+end
 
-	while ok() do
-		local _, hrp = getChar()
+-- Часть персонажа (свой, чужой или NPC) — коллизию у них не трогаем
+local function isCharacterPart(part)
+	local anc = part.Parent
+	while anc and anc ~= Workspace do
+		if anc:IsA("Model") and (anc:FindFirstChildOfClass("Humanoid") or Players:GetPlayerFromCharacter(anc)) then
+			return true
+		end
+		anc = anc.Parent
+	end
+	return false
+end
 
-		if not hrp then
-			status.SetStatus("Ожидание персонажа...", C.sub)
-			homed = false
-			needStart = true
-			task.wait(0.5)
+local function noclipPart(part)
+	if not part.CanCollide then return end
+	if farm.floorFolder and part:IsDescendantOf(farm.floorFolder) then return end
+	if isCharacterPart(part) then return end
+	farm.collisions[part] = true
+	part.CanCollide = false
+end
 
-		elseif needStart and hrp.Position.X <= START_X then
-			-- перед фармом обязательно встаём на точку 1
-			status.SetStatus("Иду на точку 1...", C.yellow)
-			if walkTo(POINTS[1], ok) then needStart = false end
+local function restoreCollisions()
+	for part in pairs(farm.collisions) do
+		if part.Parent then
+			pcall(function() part.CanCollide = true end)
+		end
+	end
+	table.clear(farm.collisions)
+end
 
+-- Если часть нашего персонажа случайно попала под отключение — возвращаем
+local function releaseCharacter(char)
+	for _, d in ipairs(char:GetDescendants()) do
+		if d:IsA("BasePart") and farm.collisions[d] then
+			d.CanCollide = true
+			farm.collisions[d] = nil
+		end
+	end
+end
+
+------------------------------------------------------------
+-- Отслеживание объектов
+------------------------------------------------------------
+-- Подписка на новые объекты + полный проход по workspace:
+-- собираем боксы и отключаем коллизию. Возвращает false, если фарм остановили.
+local function startTracking(token)
+	table.clear(farm.matched)
+	table.clear(farm.blacklist)
+	if farm.addedConn then farm.addedConn:Disconnect() end
+	if farm.charConn then farm.charConn:Disconnect() end
+
+	farm.addedConn = Workspace.DescendantAdded:Connect(function(d)
+		if nameMatch(d) then farm.matched[d] = true end
+		if d:IsA("BasePart") then noclipPart(d) end
+	end)
+	farm.charConn = LocalPlayer.CharacterAdded:Connect(function(char)
+		task.defer(releaseCharacter, char)
+	end)
+
+	local n = 0
+	for _, d in ipairs(Workspace:GetDescendants()) do
+		if not (farm.running and farm.token == token) then return false end
+		if nameMatch(d) then farm.matched[d] = true end
+		if d:IsA("BasePart") then noclipPart(d) end
+		n += 1
+		if n % 2000 == 0 then task.wait() end
+	end
+	if LocalPlayer.Character then releaseCharacter(LocalPlayer.Character) end
+	return farm.running and farm.token == token
+end
+
+local function stopTracking()
+	if farm.addedConn then
+		farm.addedConn:Disconnect()
+		farm.addedConn = nil
+	end
+	if farm.charConn then
+		farm.charConn:Disconnect()
+		farm.charConn = nil
+	end
+	restoreCollisions() -- пол при этом остаётся
+	table.clear(farm.matched)
+	table.clear(farm.blacklist)
+end
+
+-- Все подходящие боксы в промежутке zone (между X точек zone и zone+1)
+local function collectBoxes(zone)
+	local ax, bx = POINTS[zone].X, POINTS[zone + 1].X
+	local lo, hi = math.min(ax, bx), math.max(ax, bx)
+
+	local chars = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then chars[p.Character] = true end
+	end
+
+	-- «Не листья»: у них внутри есть ещё один объект с "box" — берём самый глубокий
+	local nonLeaf = {}
+	for m in pairs(farm.matched) do
+		if not inWorld(m) then
+			farm.matched[m] = nil
 		else
-			needStart = false
-			local target, count = pickTarget(hrp.Position)
+			local anc = m.Parent
+			while anc and anc ~= Workspace do
+				if nonLeaf[anc] then break end
+				nonLeaf[anc] = true
+				anc = anc.Parent
+			end
+		end
+	end
 
-			if not target then
-				if not homed then
-					status.SetStatus("Иду на точку...", C.yellow)
-					if walkTo(homePos(), ok) then homed = true end
+	local now = os.clock()
+	local list = {}
+	for m in pairs(farm.matched) do
+		if not nonLeaf[m] then
+			local skip = false
+			local until_t = farm.blacklist[m]
+			if until_t then
+				if until_t > now then skip = true else farm.blacklist[m] = nil end
+			end
+			if not skip then
+				local anc = m
+				while anc and anc ~= Workspace do
+					if chars[anc] then skip = true break end
+					anc = anc.Parent
 				end
-				if ok() then
-					status.SetStatus(("Зона %s пуста"):format(pairLabel(S.pair)), C.text)
-					status.SetInfo(("Собрано: %d · жду новые боксы"):format(collected), C.sub)
-					if S.stopWhenEmpty then
-						stop("Зона очищена")
+			end
+			if not skip then
+				local p = posOf(m)
+				if p and p.X >= lo and p.X <= hi then
+					list[#list + 1] = { inst = m, pos = p }
+				end
+			end
+		end
+	end
+	return list
+end
+
+-- Ближайший к точке from бокс и общее число боксов в промежутке
+local function pickBox(zone, from)
+	local list = collectBoxes(zone)
+	local best, bd
+	for _, e in ipairs(list) do
+		local d = (e.pos - from).Magnitude
+		if not bd or d < bd then
+			best, bd = e, d
+		end
+	end
+	return best, #list
+end
+
+local function findPrompt(inst)
+	if inst:IsA("ProximityPrompt") then return inst end
+	local p = inst:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if p then return p end
+	local par = inst.Parent
+	if par and par ~= Workspace and par:IsA("Model") and nameMatch(par) then
+		return par:FindFirstChildWhichIsA("ProximityPrompt", true)
+	end
+end
+
+------------------------------------------------------------
+-- Движение
+------------------------------------------------------------
+-- Применяем движение ПОСЛЕ стандартного управления (джойстик / WASD),
+-- иначе оно перезаписывает Humanoid:Move каждый кадр.
+pcall(function() RunService:UnbindFromRenderStep("BoxFarmMove") end)
+RunService:BindToRenderStep("BoxFarmMove", Enum.RenderPriority.Last.Value + 1, function()
+	if not farm.running then return end
+	local _, hum = getChar()
+	if not hum then return end
+	if Win.Flags.mode == "run" then
+		hum.WalkSpeed = Win.Flags.speed
+	elseif farm.origSpeed then
+		hum.WalkSpeed = farm.origSpeed
+	end
+	hum:Move(farm.move or Vector3.zero, false)
+end)
+
+-- Один шаг к цели по горизонтали. true — дошли (подошли на stopDist).
+local function stepToward(root, target, stopDist, dt)
+	local delta = target - root.Position
+	local flat = Vector3.new(delta.X, 0, delta.Z)
+	local dist = flat.Magnitude
+	if dist <= stopDist then
+		farm.move = nil
+		return true
+	end
+	local remain = dist - stopDist
+	local travel = Win.Flags.speed * dt
+	local dir = flat.Unit
+	local cframeMode = Win.Flags.mode == "cframe"
+
+	if cframeMode or remain <= travel * 1.25 then
+		-- в режиме CFrame двигаемся сами; в режиме бега — «докатываем» остаток, чтобы не промахнуться на 700
+		local adv = cframeMode and math.min(remain, travel) or remain
+		local pos = root.Position + dir * adv
+		root.CFrame = CFrame.lookAt(pos, pos + dir)
+		root.AssemblyLinearVelocity = Vector3.zero
+		farm.move = nil
+		return adv >= remain - 0.001
+	end
+
+	farm.move = dir
+	return false
+end
+
+local statusCard -- создаётся ниже
+local function ui(text, color, info)
+	if statusCard then
+		statusCard.SetStatus(text, color)
+		statusCard.SetInfo(info or "")
+	end
+end
+
+-- Бег к точке. onFrame(root) -> true прерывает бег.
+-- Возвращает "arrived" | "interrupt" | "stopped"
+local function runTo(token, target, stopDist, onFrame)
+	while farm.running and farm.token == token and Win.Alive do
+		local dt = RunService.Heartbeat:Wait()
+		local _, _, root = getChar()
+		if not root then
+			farm.move = nil
+			task.wait(0.2)
+			continue
+		end
+		if onFrame and onFrame(root) then
+			farm.move = nil
+			return "interrupt"
+		end
+		if stepToward(root, target, stopDist, dt) then
+			return "arrived"
+		end
+	end
+	farm.move = nil
+	return "stopped"
+end
+
+------------------------------------------------------------
+-- Работа с одним боксом
+------------------------------------------------------------
+local function engage(token, zone, entry)
+	local inst = entry.inst
+	local first = POINTS[zone]
+	local lockPos = entry.pos
+	local t0 = os.clock()
+	local prompt = findPrompt(inst)
+	local stopDist = prompt and math.clamp(prompt.MaxActivationDistance * 0.5, 3, 8) or 4
+	local lastFire = 0
+
+	ui("Бегу к боксу", C.yellow, zoneText(zone))
+	setE(true)
+
+	while farm.running and farm.token == token and Win.Alive do
+		local dt = RunService.Heartbeat:Wait()
+		local _, _, root = getChar()
+		if not root then
+			farm.move = nil
+			setE(false)
+			return
+		end
+		if currentZone() ~= zone then
+			farm.move = nil
+			setE(false)
+			return
+		end
+		if not inWorld(inst) then -- бокс исчез (подобран)
+			farm.move = nil
+			setE(false)
+			return
+		end
+		local p = posOf(inst)
+		if not p then
+			farm.move = nil
+			setE(false)
+			return
+		end
+
+		-- бокс сдвинулся хоть чуть-чуть → в первую точку промежутка
+		if (p - lockPos).Magnitude > Win.Flags.threshold then
+			farm.move = nil
+			setE(false)
+			ui("Бокс сдвинулся", C.yellow, ("Бег к точке %d"):format(zone))
+			runTo(token, first, 3)
+			return
+		end
+
+		-- не получается подобрать — пропускаем на 15 секунд
+		if os.clock() - t0 > Win.Flags.timeout then
+			farm.blacklist[inst] = os.clock() + 15
+			farm.move = nil
+			setE(false)
+			return
+		end
+
+		local arrived = stepToward(root, p, stopDist, dt)
+		if arrived and prompt and fireproximityprompt and os.clock() - lastFire > 0.25 then
+			lastFire = os.clock()
+			pcall(fireproximityprompt, prompt)
+		end
+	end
+	farm.move = nil
+	setE(false)
+end
+
+------------------------------------------------------------
+-- Главный цикл
+------------------------------------------------------------
+local stopFarm
+
+local function farmLoop(token)
+	while farm.running and farm.token == token and Win.Alive do
+		local _, _, root = getChar()
+		if not root then
+			farm.move = nil
+			setE(false)
+			task.wait(0.3)
+			continue
+		end
+
+		local zone = currentZone()
+		local first = POINTS[zone]
+		local entry, count = pickBox(zone, root.Position)
+
+		if entry then
+			ui("Бокс найден", C.yellow, ("%s · боксов: %d"):format(zoneText(zone), count))
+			engage(token, zone, entry)
+		else
+			setE(false)
+			ui("Зона пуста", C.white, ("%s · жду у точки %d"):format(zoneText(zone), zone))
+
+			local nextScan = 0
+			local res = runTo(token, first, 3, function(r)
+				if currentZone() ~= zone then return true end
+				if os.clock() < nextScan then return false end
+				nextScan = os.clock() + 0.2
+				return (pickBox(zone, r.Position)) ~= nil
+			end)
+
+			if res == "arrived" then
+				if Win.Flags.stopEmpty then
+					task.wait(1) -- даём боксам прогрузиться
+					if farm.running and farm.token == token and not (pickBox(zone, first)) then
+						stopFarm("Зона очищена")
 						return
 					end
-					task.wait(0.4)
-				end
-			else
-				homed = false
-				local pos0 = target:GetPivot().Position
-				status.SetStatus(("Иду к боксу %s: %s"):format(pairLabel(S.pair), target.Name), C.yellow)
-				status.SetInfo(("Собрано: %d · осталось: %d"):format(collected, count), C.sub)
-
-				local function targetChanged()
-					return not alive(target) or isPlayerPart(target)
-						or (target:GetPivot().Position - pos0).Magnitude > 6
-				end
-
-				local dist0 = (pos0 - hrp.Position).Magnitude
-				local arrived = walkTo(pos0, ok, targetChanged, dist0 / math.max(S.speed, 16) + 8)
-
-				-- reason: "gone" исчез · "taken" унесли (с руками) · "skip" ушёл до того как дошли · "timeout"
-				local reason
-				if arrived then
-					local prompts, clicks = gatherInteractables(target)
-					local t0 = os.clock()
-					local lastFire, lastGather = 0, t0
-					setE(true)
-					status.SetStatus(("Беру бокс: %s"):format(target.Name), C.yellow)
-
-					while ok() do
-						if not alive(target) then
-							reason = "gone"
-							break
-						end
-						if targetChanged() then
-							reason = "taken"
-							break
-						end
-						if os.clock() - t0 >= S.timeout then
-							reason = "timeout"
-							break
-						end
-						local _, h, m = getChar()
-						if not h then break end
-
-						local now = os.clock()
-						if S.usePrompt and now - lastFire > 0.1 then
-							lastFire = now
-							if now - lastGather > 1 then
-								lastGather = now
-								prompts, clicks = gatherInteractables(target)
-							end
-							if fpp then
-								for _, p in ipairs(prompts) do
-									if p.Parent and p.Enabled then pcall(fpp, p) end
-								end
-							end
-							if fcd then
-								for _, cd in ipairs(clicks) do
-									if cd.Parent then pcall(fcd, cd) end
-								end
-							end
-						end
-
-						if Vector3.new(pos0.X - h.Position.X, 0, pos0.Z - h.Position.Z).Magnitude < 2.5 then
-							haltMove(h, m)
-						else
-							driveTo(h, m, pos0)
-						end
-						RunService.Heartbeat:Wait()
-					end
-					setE(false)
 				else
-					local _, h = getChar()
-					if h and ok() then
-						if not alive(target) then
-							reason = "skip"
-						elseif targetChanged() then
-							reason = "skip"
-						else
-							reason = "timeout"
-						end
-					end
-				end
-
-				if reason == "gone" then
-					collected += 1
-				elseif reason == "taken" then
-					taken[target] = pos0 -- пока коробка не вернётся на место, её игнорируем
-					collected += 1
-				elseif reason == "skip" then
-					if alive(target) then taken[target] = pos0 end
-				elseif reason == "timeout" then
-					blacklist[target] = os.clock() + 20 -- завис — пропускаем на время
-				end
-
-				-- бокс исчез или его взяли в руки → идём на точку
-				if (reason == "gone" or reason == "taken") and ok() then
-					status.SetStatus("Иду на точку...", C.yellow)
-					walkTo(homePos(), ok)
-					if ok() then task.wait(S.pause) end
-					homed = true
+					task.wait(0.2)
 				end
 			end
 		end
 	end
 end
 
-start = function()
-	if S.running then return end
-	S.running = true
-	token += 1
-	local my = token
-	status.SetStatus("Запуск...", C.yellow)
-	task.spawn(function() farmLoop(my) end)
+local function startFarm()
+	if farm.running or not Win.Alive then return end
+	local _, hum = getChar()
+	if hum then farm.origSpeed = hum.WalkSpeed end
+	farm.running = true
+	farm.token += 1
+	local token = farm.token
+
+	task.spawn(function()
+		local function alive()
+			return farm.running and farm.token == token and Win.Alive
+		end
+
+		-- 1) пол (один раз) → 2) отключение коллизии у всего остального
+		ui("Подготовка", C.yellow, "Пол и отключение коллизии…")
+		buildFloor()
+		if not startTracking(token) then return end
+
+		-- 3) обязательно встаём в позицию 1, если игрок на X <= 157
+		local root
+		while alive() do
+			local _, _, r = getChar()
+			if r then root = r break end
+			task.wait(0.2)
+		end
+		if not alive() then return end
+
+		local tries = 0
+		while alive() and root and root.Position.X <= START_X_LIMIT and tries < 8 do
+			tries += 1
+			ui("Старт", C.yellow, "Встаю в позицию 1")
+			root.CFrame = CFrame.lookAt(POINTS[1], POINTS[1] + Vector3.xAxis)
+			root.AssemblyLinearVelocity = Vector3.zero
+			task.wait(0.3)
+			local _, _, r = getChar()
+			root = r or root
+		end
+		if not alive() then return end
+
+		-- 4) только теперь начинается фарм
+		farmLoop(token)
+	end)
 end
 
-stop = function(reason)
-	cleanup()
-	status.SetStatus(reason or "Остановлено", C.sub)
+function stopFarm(reason)
+	if not farm.running then return end
+	farm.running = false
+	farm.token += 1
+	farm.move = nil
+	setE(false)
+	stopTracking()
+	local _, hum = getChar()
+	if hum and farm.origSpeed then hum.WalkSpeed = farm.origSpeed end
+	if Win.Alive then
+		ui("Остановлено", MenuLib.Theme.sub, reason or "")
+	end
 end
 
 ------------------------------------------------------------
--- Кэш боксов + очистка
+-- Вкладка ФАРМ
 ------------------------------------------------------------
-Win:Track(Workspace.DescendantAdded:Connect(function(inst)
-	if matchBox(inst) then boxes[inst] = true end
-end))
-Win:Track(Workspace.DescendantRemoving:Connect(function(inst)
-	boxes[inst] = nil
-end))
-task.spawn(rebuildBoxes)
+farmTab:AddSection("СТАТУС")
+statusCard = farmTab:AddStatus()
 
+farmTab:AddSection("ПРОМЕЖУТОК")
+local zoneNote
+farmTab:AddNumber("Зона (N → N+1)", {
+	Flag = "zone",
+	Default = 1,
+	Min = 1,
+	Max = ZONE_COUNT,
+	Step = 1,
+	Dec = 0,
+	Callback = function()
+		if zoneNote then
+			local z = currentZone()
+			zoneNote.Text = ("Выбрано: точка %d → точка %d  (X %.0f … %.0f)")
+				:format(z, z + 1, POINTS[z].X, POINTS[z + 1].X)
+		end
+	end,
+})
+zoneNote = farmTab:AddNote("", 28)
+do
+	local z = currentZone()
+	zoneNote.Text = ("Выбрано: точка %d → точка %d  (X %.0f … %.0f)")
+		:format(z, z + 1, POINTS[z].X, POINTS[z + 1].X)
+end
+
+farmTab:AddSection("УПРАВЛЕНИЕ")
+farmTab:AddButtonRow({
+	{ Text = "▶ СТАРТ", Bg = MenuLib.Theme.yellow, Fg = MenuLib.Theme.black, Callback = startFarm },
+	{ Text = "■ СТОП", Callback = function() stopFarm("Остановлено вручную") end },
+})
+farmTab:AddNote("Ищет объекты с «box» в имени между двумя выбранными точками, бежит к ним с зажатой E.", 42)
+
+------------------------------------------------------------
+-- Вкладка НАСТРОЙКИ
+------------------------------------------------------------
+setTab:AddSection("ДВИЖЕНИЕ")
+setTab:AddNumber("Скорость бега", {
+	Flag = "speed", Default = 700, Min = 16, Max = 2000, Step = 50, Dec = 0,
+})
+setTab:AddCycle("Режим", {
+	{ id = "run", label = "Бег (WalkSpeed)" },
+	{ id = "cframe", label = "CFrame" },
+}, { Flag = "mode", Default = "run" })
+setTab:AddNote("Если игра сбрасывает WalkSpeed или бег не работает — переключи на CFrame.", 30)
+
+setTab:AddSection("БОКСЫ")
+setTab:AddNumber("Порог сдвига", {
+	Flag = "threshold", Default = 0.05, Min = 0.01, Max = 5, Step = 0.01, Dec = 2,
+})
+setTab:AddNumber("Таймаут на бокс, с", {
+	Flag = "timeout", Default = 8, Min = 2, Max = 60, Step = 1, Dec = 0,
+})
+setTab:AddToggle("Стоп, когда зона пуста", { Flag = "stopEmpty", Default = false })
+setTab:AddNote("Сдвиг больше порога (в студах) = бокс «переместился» → бег в первую точку.", 30)
+
+------------------------------------------------------------
+-- Очистка
+------------------------------------------------------------
 Win.OnDestroy = function()
-	rebuildId += 1
-	cleanup() -- пол остаётся, коллизии и скорость возвращаются
+	stopFarm()
+	if farm.floorFolder then
+		pcall(function() farm.floorFolder:Destroy() end)
+		farm.floorFolder = nil
+	end
+	pcall(function() RunService:UnbindFromRenderStep("BoxFarmMove") end)
 end
+
+ui("Остановлено", MenuLib.Theme.sub, "Выбери зону и нажми СТАРТ")
